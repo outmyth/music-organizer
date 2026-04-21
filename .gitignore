@@ -1,0 +1,29 @@
+# Music data — keep folders as reference, but ignore all files inside
+# (copyrighted content, ~15GB combined)
+in/*
+!in/.gitkeep
+out/*
+!out/.gitkeep
+
+# macOS
+.DS_Store
+._*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.venv/
+venv/
+
+# Claude Code local state
+.claude/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
