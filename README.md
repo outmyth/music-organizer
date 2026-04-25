@@ -6,6 +6,8 @@ Automatically scans local music files, reads metadata, organizes them into a cle
 
 **Compatible devices:** Sony HAP-Z1ES · Sony Walkman (NW-WM1Z / WM1A / NW-WM1ZM2) · Chord Mojo+Poly / Hugo · Lotoo PAW Gold 2017.
 
+> 📂 **See [`examples/`](examples/)** for a hand-crafted demo of the input/output structure (0-byte placeholder audio + real `.m3u` / `.json` content).
+
 ---
 
 ## Requirements

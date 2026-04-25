@@ -4,7 +4,9 @@
 
 自动扫描本地音乐文件，读取 metadata，整理文件结构并生成 M3U 播放列表。
 
-兼容设备：Sony HAP-Z1ES、Sony Walkman（NW-WM1Z / WM1A / NW-WM1ZM2）、Chord Mojo+Poly / Hugo。
+兼容设备：Sony HAP-Z1ES、Sony Walkman（NW-WM1Z / WM1A / NW-WM1ZM2）、Chord Mojo+Poly / Hugo、Lotoo PAW Gold 2017。
+
+> 📂 **查看 [`examples/`](examples/)** 目录——里面有手工构造的输入/输出结构演示（0 字节占位音频 + 真实可读的 `.m3u` / `.json` 内容）。
 
 ---
 

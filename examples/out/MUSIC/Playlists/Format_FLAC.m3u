@@ -1,0 +1,21 @@
+#EXTM3U
+#EXTENC:UTF-8
+
+#EXTINF:445,Wiener Philharmoniker - I. Allegro con brio
+../Classical/Beethoven/(1808) Symphony No. 5/01 - I. Allegro con brio.flac
+#EXTINF:617,Wiener Philharmoniker - II. Andante con moto
+../Classical/Beethoven/(1808) Symphony No. 5/02 - II. Andante con moto.flac
+#EXTINF:326,Wiener Philharmoniker - III. Scherzo. Allegro
+../Classical/Beethoven/(1808) Symphony No. 5/03 - III. Scherzo. Allegro.flac
+#EXTINF:511,Wiener Philharmoniker - IV. Allegro
+../Classical/Beethoven/(1808) Symphony No. 5/04 - IV. Allegro.flac
+#EXTINF:545,Miles Davis - So What
+../Jazz/Miles Davis/(1959) Kind of Blue/01 - So What.flac
+#EXTINF:586,Miles Davis - Freddie Freeloader
+../Jazz/Miles Davis/(1959) Kind of Blue/02 - Freddie Freeloader.flac
+#EXTINF:337,Miles Davis - Blue in Green
+../Jazz/Miles Davis/(1959) Kind of Blue/03 - Blue in Green.flac
+#EXTINF:236,陳百強 - 一見鍾情
+../Cantopop/陳百強/(1985) 一見鍾情/01 - 一見鍾情.flac
+#EXTINF:243,陳百強 - 偏偏喜歡你
+../Cantopop/陳百強/(1985) 一見鍾情/02 - 偏偏喜歡你.flac
