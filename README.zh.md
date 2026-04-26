@@ -4,9 +4,11 @@
 
 自动扫描本地音乐文件，读取 metadata，整理文件结构并生成 M3U 播放列表。
 
-兼容设备：Sony HAP-Z1ES、Sony Walkman（NW-WM1Z / WM1A / NW-WM1ZM2）、Chord Mojo+Poly / Hugo、Lotoo PAW Gold 2017。
+兼容设备：Sony HAP-Z1ES、Sony Walkman（NW-WM1Z / WM1A / NW-WM1ZM2）、Chord Mojo+Poly / Hugo。
 
-> 📂 **查看 [`examples/`](examples/)** 目录——里面有手工构造的输入/输出结构演示（0 字节占位音频 + 真实可读的 `.m3u` / `.json` 内容）。
+> ⚠️ **不兼容 Lotoo PAW Gold 2017**：其播放列表扫描器不解析 `..`，要求绝对路径 `/MUSIC/...`，与 Chord Poly MPD（要求 `MUSIC/...` 相对路径）冲突，没有任何一种 .m3u 格式能同时满足两者。
+
+> 📂 **查看 [`examples/`](examples/)** 目录——里面有手工构造的输入/输出结构演示（0 字节占位音频 + 真实可读的 `.m3u` 内容）。
 
 ---
 
@@ -32,34 +34,28 @@ brew install ffmpeg
 │   └── Test/                  ← 特殊目录：测试子集（见下方说明）
 │       ├── Beyerdynamic T1/   ← 分类标签（可自定义）
 │       └── Audio Format/      ← 分类标签（可自定义）
-└── out/                       ← 整理后输出（可整盘拷到 SD 卡根目录）
-    ├── MUSIC/                 ← 注意大写！Sony WM1A 只扫描 /MUSIC/
-    │   ├── Jazz/              ← 普通文件按流派整理
+└── out/                                    ← 整盘拷到 SD 卡根
+    ├── MUSIC/                              ← 注意大写！Sony WM1A 只扫描 /MUSIC/
+    │   ├── Jazz/                           ← 普通文件按流派整理
     │   │   └── Miles Davis/
     │   │       └── (1959) Kind of Blue/
     │   ├── Classical/
     │   ├── Cantopop/
     │   ├── Mandopop/
     │   ├── Various/
-    │   ├── Test/              ← Test 文件单独隔离
-    │   │   ├── Beyerdynamic T1/
-    │   │   │   └── Jazz/Miles Davis/...
-    │   │   └── Audio Format/
-    │   │       └── Mandopop/陳慧嫻/...
-    │   └── Playlists/         ← Sony WM1A 专用播放列表目录（内容同 playlists/）
-    │       ├── All.m3u
-    │       ├── Album_*.m3u
-    │       └── ...
-    └── playlists/             ← Lotoo PAW Gold 2017 / Chord Poly / 通用
-        ├── All.m3u                     ← 含所有曲目（含 Test）
-        ├── Album_<Artist> - <Album>.m3u   ← 每张专辑
-        ├── Artist_<Artist>.m3u            ← 每位艺术家
-        ├── Format_<FMT>.m3u               ← 按格式分组（FLAC/DSD/WAV/…）
-        ├── Test_<Category>.m3u            ← Test 子集每个分类一个
-        └── music_index.json               ← --no-json 时不生成
+    │   └── Test/                           ← Test 文件单独隔离
+    │       ├── Beyerdynamic T1/
+    │       │   └── Jazz/Miles Davis/...
+    │       └── Audio Format/
+    │           └── Mandopop/陳慧嫻/...
+    ├── All.m3u                             ← 含所有曲目（含 Test）
+    ├── Album_<Artist> - <Album>.m3u        ← 每张专辑
+    ├── Artist_<Artist>.m3u                 ← 每位艺术家
+    ├── Format_<FMT>.m3u                    ← 按格式分组（FLAC/DSD/WAV/…）
+    └── Test_<Category>.m3u                 ← Test 子集每个分类一个
 ```
 
-> **扁平目录 + `<Category>_<Name>` 统一命名**：Lotoo PAW Gold 2017 的播放列表扫描器**不会递归子目录**，所以所有播放列表都在 `playlists/` 根目录。`Album_` / `Artist_` / `Format_` / `Test_` 前缀让同类播放列表在播放器界面里自动聚在一起。扩展名用 `.m3u` 而不是 `.m3u8`，因为 Chord Poly GoFigure 对 `.m3u8` 不可靠。
+> **所有播放列表都写在 SD 卡根目录**（这是 Sony Walkman 与 Chord Poly 唯一都能识别的位置 — 详见下方"SD 卡 DAP 兼容性说明"）。`Album_` / `Artist_` / `Format_` / `Test_` 前缀让同类播放列表在播放器界面里自动聚在一起。扩展名用 `.m3u` 而不是 `.m3u8`，因为 Chord Poly GoFigure 对 `.m3u8` 不可靠。
 
 ### Test/ 目录说明
 
@@ -77,7 +73,7 @@ brew install ffmpeg
 | 输出路径 | `out/MUSIC/{Genre}/{Artist}/...` | `out/MUSIC/Test/{Category}/{Genre}/{Artist}/...` |
 | All.m3u | 包含 | **包含** |
 | Album_* / Artist_* / Format_* | 包含 | **不包含** |
-| 专属播放列表 | 无 | `playlists/Test_{Category}.m3u` |
+| 专属播放列表 | 无 | `out/Test_{Category}.m3u` |
 
 > 同一个 `Test/{Category}/` 下的所有文件会合并到同一个 `Test_{Category}.m3u`，文件名中的冒号、问号、单引号等 FAT32/exFAT 敏感字符会被清理。
 
@@ -88,17 +84,11 @@ brew install ffmpeg
 ```bash
 cd <project-dir>
 
-# 默认：强制覆盖所有文件 + 生成 music_index.json
+# 默认：强制覆盖所有文件
 python3 music_organizer.py
 
 # 增量模式：跳过大小相同的已有文件
 python3 music_organizer.py --no-force
-
-# 不生成 music_index.json
-python3 music_organizer.py --no-json
-
-# 增量模式 + 不生成 JSON
-python3 music_organizer.py --no-force --no-json
 ```
 
 ### 参数说明
@@ -106,7 +96,6 @@ python3 music_organizer.py --no-force --no-json
 | 参数 | 说明 |
 |------|------|
 | `--no-force` | 跳过大小相同的已有文件（默认：强制覆盖） |
-| `--no-json` | 不生成 `music_index.json`（默认：生成） |
 
 ---
 
@@ -149,10 +138,8 @@ in/ 原始文件
 ⑥ 生成 M3U 播放列表（全量重建，扁平 `<Category>_<Name>.m3u` 命名）
      → All.m3u、Album_*、Artist_*、Format_*
      → Test/ 子集生成 Test_<Category>.m3u
-     → 同时写到 playlists/ 和 MUSIC/Playlists/ 两处
-     → UTF-8 + BOM + CRLF；路径相对播放列表文件自身所在目录
-   ↓
-⑦ 生成 music_index.json（--no-json 时跳过）
+     → 写到 SD 卡根（out/）单一位置 — Sony / Poly 通用
+     → UTF-8 + BOM + CRLF；路径用 MUSIC/<genre>/... 形式（无前导 /，无 ..）
 ```
 
 ---
@@ -218,23 +205,23 @@ python3 music_organizer.py
 
 | 固件/设备 | 已处理的坑 | 对应实现 |
 |-----------|-----------|---------|
-| **Sony WM1A / WM1ZM2** | 只索引 `/MUSIC/`（大写），只扫描 `MUSIC/Playlists/` 下的播放列表 | 音乐目录命名 `MUSIC/`；播放列表同时写到 `MUSIC/Playlists/` |
-| **Lotoo PAW Gold 2017** | 播放列表扫描器**不递归子目录**；需要 UTF-8 BOM 才能正确显示中文 | 扁平目录 + `<Category>_<Name>.m3u` 前缀；文件写入带 BOM |
-| **Chord Poly (GoFigure)** | 对 `.m3u8` 扩展名不可靠；路径解析遵循标准 M3U（相对播放列表文件自身） | 扩展名用 `.m3u`；路径用 `os.path.relpath(track, pl_file.parent)` |
+| **Sony WM1A / WM1ZM2** | 只索引 `/MUSIC/`（大写）；标准 M3U 路径解析（相对播放列表文件自身） | 音乐目录命名 `MUSIC/`；.m3u 写在 SD 根，路径 `MUSIC/...` 可正确解析 |
+| **Chord Poly (GoFigure / MPD)** | MPD 按 `music_directory` 解析路径，不按播放列表位置；对 `.m3u8` 不可靠 | .m3u 路径用 `MUSIC/...`（无前导 `/`、无 `..`）；MPD 配置 `music_directory = /SD 根/` |
 | **FAT32 / exFAT 文件系统** | 半角冒号、问号、单引号（包括中文弯引号 `‘ ’`）、感叹号会让扫描器出错 | `sanitize()` 清理 `: ： ' ‘ ’ ! * ? \| " < >` 及其他非法字符 |
 
-**播放列表相对路径规范（重要）：**
+**播放列表路径规范（Sony + Poly 唯一交集）：**
 
 ```
 #EXTM3U
 #EXTENC:UTF-8
 
 #EXTINF:243,Miles Davis - So What
-../MUSIC/Jazz/Miles Davis/(1959) Kind of Blue/01 - So What.flac
+MUSIC/Jazz/Miles Davis/(1959) Kind of Blue/01 - So What.flac
 ```
 
-- 路径相对**播放列表文件自身所在目录**（标准 M3U 语义），不是"相对 SD 卡根"
+- 路径用 `MUSIC/<genre>/...` 形式 — **无前导 `/`，无 `..` 父目录回溯**
+- 这是同时让 Sony Walkman（标准 M3U，从 SD 根的 .m3u 相对解析）和 Chord Poly MPD（相对 `music_directory` = SD 根 解析）都能正确识别的唯一格式
 - 文件编码：UTF-8 + BOM（`EF BB BF`），行尾 CRLF
 - 扩展名：`.m3u`（不用 `.m3u8`）
 
-**Chord Poly MPD 模式的例外：** 如果用的是 Poly 的 MPD 服务器模式（而不是 SD 卡本地播放），MPD 是按 `music_directory` 配置项解析路径而非播放列表自身目录——这种场景需要自行调整 MPD 配置 `music_directory = /path/to/out/MUSIC/`。
+> **为什么不兼容 Lotoo PAW Gold 2017：** Lotoo 的扫描器不解析 `..`，要求绝对路径 `/MUSIC/...`，但绝对路径会让 Chord Poly MPD 把 `/` 当成文件系统根而失败。三家设备没有共通的 .m3u 格式，因此本项目专门优化 Sony + Poly。

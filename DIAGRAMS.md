@@ -35,17 +35,15 @@ flowchart LR
 
     STAG["🗂 /tmp/staging/"]
 
-    subgraph OUTPUT["📁 out/"]
+    subgraph OUTPUT["📁 out/ (= SD 卡根)"]
         subgraph MUSIC["MUSIC/ (大写)"]
             O1["Genre/Artist/\nYear Album/\nNN-Title.ext"]
             O2["Test/Category/..."]
-            O7["Playlists/\n(Sony 专用副本)"]
         end
-        subgraph PLAYLISTS["playlists/"]
+        subgraph PLAYLISTS["SD 根 .m3u（路径 MUSIC/...）"]
             O3[All.m3u]
             O4["Album_* / Artist_*\nFormat_*"]
             O5["Test_{Category}.m3u"]
-            O6[music_index.json]
         end
     end
 
@@ -66,7 +64,7 @@ flowchart LR
     P5 -->|写入 tag| T2
     P5 --> O1 & O2
     P5 --> P6 --> O1 & O2
-    P5 --> P7 --> O3 & O4 & O5 & O6 & O7
+    P5 --> P7 --> O3 & O4 & O5
     P5 --> P8 -->|清理孤儿| O1 & O2
     OUTPUT -->|USB / Network| D1
     OUTPUT -->|SD Card| D2 & D3
@@ -83,7 +81,7 @@ flowchart LR
     class P1,P2,P3,P4,P5,P6,P7,P8 core
     class T1,T2 tool
     class STAG staging
-    class O1,O2,O3,O4,O5,O6,O7 output
+    class O1,O2,O3,O4,O5 output
     class D1,D2,D3 device
     class C1,C2,C3,C4 config
 ```
@@ -124,19 +122,16 @@ flowchart TD
     FFCOPY & SHCOPY & S4 --> S5
 
     S5["🖼 Step 5: 封面图\nfolder.jpg → cover.jpg → front.jpg"]
-    S5 --> S6["🎵 Step 6: 播放列表\nAll / Album_* / Artist_*\nFormat_* / Test_*\n同时写 playlists/ 和 MUSIC/Playlists/"]
-    S6 --> S7{"--no-json?"}
-    S7 -->|否| S8["📋 Step 7: music_index.json"]
-    S7 -->|是| S9
-    S8 --> S9["🗑 Step 8: 孤儿清理\n删除过期文件 & 空目录"]
-    S9 --> S10["📊 Step 9: 摘要报告\n流派/格式统计 · 总时长 · 缺失 tag"]
-    S10 --> END([✅ Done])
+    S5 --> S6["🎵 Step 6: 播放列表\nAll / Album_* / Artist_*\nFormat_* / Test_*\n写到 SD 根，路径 MUSIC/..."]
+    S6 --> S7["🗑 Step 7: 孤儿清理\n删除过期文件 & 空目录"]
+    S7 --> S8["📊 Step 8: 摘要报告\n流派/格式统计 · 总时长 · 缺失 tag"]
+    S8 --> END([✅ Done])
 
     style START fill:#2d6a4f,color:#fff,stroke:none
     style END fill:#2d6a4f,color:#fff,stroke:none
     style S2 fill:#1d3557,color:#fff,stroke:none
     style S3 fill:#1d3557,color:#fff,stroke:none
-    style S9 fill:#6d1a0f,color:#fff,stroke:none
+    style S7 fill:#6d1a0f,color:#fff,stroke:none
     style CUE_PATH fill:#1a2a3a,color:#ccc,stroke:#457b9d
     style REG_PATH fill:#1a2a1a,color:#ccc,stroke:#2a9d8f
 ```

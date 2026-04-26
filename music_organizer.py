@@ -4,10 +4,8 @@
 Music Organizer v2 — Sony HAP-Z1ES / Walkman / Chord Poly
 ==========================================================
 用法：
-  python3 music_organizer.py               # 默认：强制覆盖 + 生成 JSON
+  python3 music_organizer.py               # 默认：强制覆盖
   python3 music_organizer.py --no-force    # 跳过大小相同的已有文件
-  python3 music_organizer.py --no-json     # 不生成 music_index.json
-  python3 music_organizer.py --no-force --no-json
 
 功能：
 • CUE+image 整轨拆分（Beethoven FLAC、黄教堂 WAV）via ffmpeg
@@ -30,8 +28,7 @@ SOURCE     = _HERE / "in"
 TEST_ROOT  = SOURCE / 'Test'    # fixed folder; sub-dirs become category names
 DEST         = _HERE / "out"
 MUSIC_DEST   = DEST / "MUSIC"              # CAPITAL — Sony WM1A only indexes /MUSIC/
-PL_DEST      = DEST / "playlists"          # flat dir for Lotoo / Chord Poly / generic
-SONY_PL_DEST = MUSIC_DEST / "Playlists"    # Sony WM1A scans MUSIC/Playlists/ exclusively
+PL_DEST      = DEST                        # .m3u files live at SD root (Sony + Poly common ground)
 STAGING      = Path(tempfile.gettempdir()) / "music_organizer_staging"  # temp for CUE splits
 
 AUDIO_EXT = {'.flac','.mp3','.m4a','.aac','.wav','.aiff','.aif',
@@ -561,7 +558,7 @@ def find_cover(folder: Path) -> Path | None:
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def main(force: bool = False, gen_json: bool = False):
+def main(force: bool = False):
     print("=" * 65)
     print("  Music Organizer v2  —  Sony / Chord Poly Edition")
     if force:
@@ -862,27 +859,25 @@ def main(force: bool = False, gen_json: bool = False):
     print(f"   ✅  {art_copied} cover art file(s) copied.")
 
     # ── Step 6: Generate playlists ────────────────────────────────────────────
-    # Flat single-level layout — Lotoo PAW Gold 2017's scanner does NOT recurse
-    # into subdirectories, so by_album/Artist/X.m3u would be invisible. Every
-    # playlist lives directly at playlists/ root, prefixed ("album · ", etc.)
-    # to keep them grouped visually.
-    #
-    # Each playlist is written TWICE:
-    #   PL_DEST      (playlists/)         — for Lotoo / Chord Poly / generic
-    #   SONY_PL_DEST (MUSIC/Playlists/)   — Sony WM1A only indexes this path
-    # Each copy has its own relative paths so both resolve correctly.
+    # Single output location: SD card root (= DEST). Paths inside use the
+    # "MUSIC/<genre>/..." form (no leading slash, no `..`) — the only format
+    # that resolves correctly on BOTH targets:
+    #   - Sony Walkman: standard M3U, paths relative to playlist file. With
+    #                   .m3u at SD root, "MUSIC/..." → "/MUSIC/..." ✓
+    #   - Chord Poly (MPD): paths relative to music_directory (= SD root),
+    #                   "MUSIC/..." resolves correctly ✓
     #
     # Extension: .m3u (not .m3u8) — Chord Poly GoFigure is unreliable with
-    # .m3u8; content is still UTF-8 + BOM which Sony/Lotoo detect regardless.
-    # Line terminator: CRLF (Sony/Lotoo firmware preference).
+    # .m3u8; content is still UTF-8 + BOM. Line terminator: CRLF.
     print(f"\n🎵  Generating playlists …")
     PL_DEST.mkdir(parents=True, exist_ok=True)
-    SONY_PL_DEST.mkdir(parents=True, exist_ok=True)
-    # Full rebuild: clear stale playlists (both legacy .m3u8 and flat .m3u,
-    # plus the old by_*/ subdirs left over from prior runs).
-    for root in (PL_DEST, SONY_PL_DEST):
-        for old in list(root.rglob('*.m3u')) + list(root.rglob('*.m3u8')):
-            old.unlink()
+    # Full rebuild: clear stale .m3u/.m3u8 from SD root, plus legacy
+    # MUSIC/Playlists/ and playlists/ subdirs from prior runs.
+    for old in list(PL_DEST.glob('*.m3u')) + list(PL_DEST.glob('*.m3u8')):
+        old.unlink()
+    for legacy in (MUSIC_DEST / 'Playlists', DEST / 'playlists'):
+        if legacy.exists():
+            shutil.rmtree(legacy)
     for sub in ('by_album', 'by_artist', 'by_format'):
         old = PL_DEST / sub
         if old.exists():
@@ -895,10 +890,10 @@ def main(force: bool = False, gen_json: bool = False):
 
     hdr = '#EXTM3U\n#EXTENC:UTF-8\n\n'
 
-    def entry(t, pl_file: Path):
-        """Path relative to the playlist file's own directory (standard M3U)."""
+    def entry(t):
+        """Path relative to SD root (DEST) — works for Sony + Poly."""
         dur = int(t.get('duration', 0))
-        rel = os.path.relpath(str(t['dest']), str(pl_file.parent)).replace(chr(92), '/')
+        rel = os.path.relpath(str(t['dest']), str(DEST)).replace(chr(92), '/')
         return f"#EXTINF:{dur},{t['artist']} - {t['title']}\n{rel}\n"
 
     def open_pl(pl_file: Path):
@@ -906,17 +901,12 @@ def main(force: bool = False, gen_json: bool = False):
         return pl_file.open('w', encoding='utf-8-sig', newline='\r\n')
 
     def write_playlists(name: str, tracks: list) -> int:
-        """Write the same playlist to both PL_DEST and SONY_PL_DEST.
-        Each copy computes paths relative to its own location.
-        """
         valid = [t for t in tracks if 'dest' in t]
-        for pl_root in (PL_DEST, SONY_PL_DEST):
-            pl_file = pl_root / name
-            pl_file.parent.mkdir(parents=True, exist_ok=True)
-            with open_pl(pl_file) as f:
-                f.write(hdr)
-                for t in valid:
-                    f.write(entry(t, pl_file))
+        pl_file = PL_DEST / name
+        with open_pl(pl_file) as f:
+            f.write(hdr)
+            for t in valid:
+                f.write(entry(t))
         return len(valid)
 
     # Sort: artist > album > disc > track > title
@@ -976,40 +966,9 @@ def main(force: bool = False, gen_json: bool = False):
     print(f"   ✅  Album_*.m3u  ({len(by_album)} playlists)")
     print(f"   ✅  Artist_*.m3u ({len(by_artist)} playlists)")
     print(f"   ✅  Format_*.m3u ({len(by_format)} playlists: {', '.join(sorted(by_format))})")
-    print(f"   📁  Each playlist written to both playlists/ and MUSIC/Playlists/")
+    print(f"   📁  All playlists written to SD root: {PL_DEST}")
 
-    # ── Step 7: JSON index ────────────────────────────────────────────────────
-    if gen_json:
-        index = {
-            "generated": "2026-04-05",
-            "total_tracks": total_valid,
-            "tracks": [
-                {
-                    "title":        t['title'],
-                    "artist":       t['artist'],
-                    "album":        t['album'],
-                    "album_artist": t['album_artist'],
-                    "genre":        t['genre'],
-                    "year":         t['year'],
-                    "track":        t['track'],
-                    "disc":         t.get('disc',''),
-                    "format":       t['format'],
-                    "duration_sec": round(t.get('duration', 0), 1),
-                    "path":         os.path.relpath(str(t['dest']), str(DEST)).replace('\\','/')
-                                    if 'dest' in t else '',
-                }
-                for t in sorted(all_tracks,
-                    key=lambda x: (x.get('genre',''), x.get('artist',''),
-                                   x.get('album',''), x.get('disc',''), x.get('track','')))
-                if 'dest' in t
-            ]
-        }
-        idx_file = PL_DEST / 'music_index.json'
-        with idx_file.open('w', encoding='utf-8') as f:
-            json.dump(index, f, ensure_ascii=False, indent=2)
-        print(f"   ✅  music_index.json ({total_valid} entries)")
-
-    # ── Step 8: Orphan cleanup ────────────────────────────────────────────────
+    # ── Step 7: Orphan cleanup ────────────────────────────────────────────────
     # Collect every file this run intentionally wrote to Organized/Music/
     expected_files: set[Path] = set()
     for t in all_tracks:
@@ -1022,9 +981,6 @@ def main(force: bool = False, gen_json: bool = False):
     if MUSIC_DEST.exists():
         for p in MUSIC_DEST.rglob('*'):
             if not p.is_file():
-                continue
-            # Skip the Sony playlist dir — its .m3u files are written by Step 6.
-            if SONY_PL_DEST in p.parents:
                 continue
             if p.name == '.DS_Store':
                 orphans.append(p)
@@ -1054,7 +1010,7 @@ def main(force: bool = False, gen_json: bool = False):
     else:
         print("\n🗑   No orphan files found.")
 
-    # ── Step 9: Summary report ────────────────────────────────────────────────
+    # ── Step 8: Summary report ────────────────────────────────────────────────
     print("\n" + "=" * 65)
     print("  SUMMARY REPORT")
     print("=" * 65)
@@ -1095,19 +1051,15 @@ if __name__ == '__main__':
         description='Music Organizer v2 — Sony HAP-Z1ES / Walkman / Chord Poly',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
-            '默认行为（无参数）等同于 --force --json：\n'
-            '  强制覆盖已有文件，并生成 music_index.json。\n\n'
+            '默认行为（无参数）等同于 --force：\n'
+            '  强制覆盖已有文件。\n\n'
             '示例：\n'
-            '  python3 music_organizer.py              # 全量处理 + 生成 JSON\n'
+            '  python3 music_organizer.py              # 全量处理\n'
             '  python3 music_organizer.py --no-force   # 跳过大小相同的已有文件\n'
-            '  python3 music_organizer.py --no-json    # 不生成 music_index.json\n'
-            '  python3 music_organizer.py --no-force --no-json  # 纯增量，无 JSON\n'
         ),
     )
     ap.add_argument('--no-force', dest='force', action='store_false',
                     help='跳过大小相同的已有文件（默认：强制覆盖）')
-    ap.add_argument('--no-json', dest='gen_json', action='store_false',
-                    help='不生成 music_index.json（默认：生成）')
-    ap.set_defaults(force=True, gen_json=True)
+    ap.set_defaults(force=True)
     args = ap.parse_args()
-    main(force=args.force, gen_json=args.gen_json)
+    main(force=args.force)

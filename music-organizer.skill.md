@@ -21,21 +21,17 @@ out/                                           ← copy whole folder to SD-card 
 │   ├── {Genre}/{Artist}/({Year}) {Album}/    ← normal files
 │   │   ├── {NN} - {Title}.{ext}
 │   │   └── folder.jpg
-│   ├── Test/{Category}/{Genre}/{Artist}/     ← Test files (isolated)
-│   └── Playlists/                            ← Sony WM1A exclusive playlist dir
-│       └── (same flat .m3u files as below)
-└── playlists/                                 ← Lotoo / Chord Poly / generic
-    ├── All.m3u                                ← includes ALL tracks (incl. Test)
-    ├── Album_{Artist} - {Album}.m3u           ← per album
-    ├── Artist_{Artist}.m3u                    ← per artist
-    ├── Format_{FORMAT}.m3u                    ← per format
-    ├── Test_{Category}.m3u                    ← one per test category
-    └── music_index.json
+│   └── Test/{Category}/{Genre}/{Artist}/     ← Test files (isolated)
+├── All.m3u                                    ← includes ALL tracks (incl. Test)
+├── Album_{Artist} - {Album}.m3u               ← per album
+├── Artist_{Artist}.m3u                        ← per artist
+├── Format_{FORMAT}.m3u                        ← per format
+└── Test_{Category}.m3u                        ← one per test category
 ```
 
 **Naming convention**: `<Category>_<Name>.m3u` — underscore separates category from name (two-level grouping signal visible in DAP UI); hyphen `" - "` separates fields within the name (e.g. `Album_Miles Davis - Kind of Blue.m3u`). All ASCII, unambiguous, DAP-friendly.
 
-**Why flat + dual-write**: Lotoo PAW Gold 2017's playlist scanner does NOT recurse into subdirectories; Sony WM1A only indexes `MUSIC/Playlists/`. One flat directory + writing to both locations covers Lotoo, Chord Poly, Sony, and generic MPD players.
+**Why a single SD-root location**: Sony Walkman (standard M3U, paths relative to .m3u file) and Chord Poly MPD (paths relative to `music_directory` = SD root) both correctly resolve paths of the form `MUSIC/<genre>/...` only when the .m3u sits at the SD-card root. **Lotoo PAW Gold 2017 is not supported** — it requires absolute `/MUSIC/...` paths that conflict with Poly's MPD resolution.
 
 ### Test/ — reserved directory name
 
@@ -142,11 +138,11 @@ For each unique destination album folder:
 
 ### Step 6 — Playlist generation（播放列表生成）
 
-All existing `.m3u` / `.m3u8` files (plus legacy `by_*/` subdirs) deleted first — full rebuild every run.
+All existing `.m3u` / `.m3u8` files (plus legacy `playlists/`, `MUSIC/Playlists/`, and `by_*/` subdirs from prior runs) deleted first — full rebuild every run.
 
 Tracks sorted by: `artist → album → disc → track → title`.
 
-Every playlist is written **twice** — once to `out/playlists/` (Lotoo / Chord Poly / generic) and once to `out/MUSIC/Playlists/` (Sony WM1A only indexes this path). Each copy computes paths relative to its own location.
+Every playlist is written to **a single location: `out/` (the SD-card root)**. This is the only spot where one path format works for both Sony Walkman and Chord Poly.
 
 | Playlist | Contents | Naming |
 |---|---|---|
@@ -156,35 +152,29 @@ Every playlist is written **twice** — once to `out/playlists/` (Lotoo / Chord 
 | Per format | Normal only | `Format_{FORMAT}.m3u` |
 | Per test category | Test only | `Test_{Category}.m3u` |
 
-**Path format**: `os.path.relpath(track.dest, pl_file.parent)` — relative to the **playlist file's own directory** (standard M3U semantics, required by Chord Poly / Lotoo / Sony in SD-card mode). NOT relative to a library root.
+**Path format**: `os.path.relpath(track.dest, DEST)` — relative to the SD-card root, e.g. `MUSIC/Jazz/Miles Davis/(1959) Kind of Blue/01 - So What.flac`. **No leading `/`, no `..`** — this is the only format that resolves correctly on both Sony Walkman (standard M3U, paths relative to .m3u location at SD root) and Chord Poly MPD (paths relative to `music_directory` = SD root).
 
 **File format**:
 - Extension: `.m3u` (not `.m3u8` — Chord Poly GoFigure is unreliable with `.m3u8`)
-- Encoding: **UTF-8 + BOM** (`encoding='utf-8-sig'`) — required by Lotoo and older Chord Poly firmware for Chinese characters
-- Line terminator: **CRLF** (`newline='\r\n'`) — Sony / Lotoo firmware preference
+- Encoding: **UTF-8 + BOM** (`encoding='utf-8-sig'`) — required by older Chord Poly firmware for Chinese characters
+- Line terminator: **CRLF** (`newline='\r\n'`)
 - Header: `#EXTM3U\n#EXTENC:UTF-8\n\n`
 - Entry: `#EXTINF:{sec},{Artist} - {Title}\n{relpath}\n`
 
-**Filesystem-safe naming (`sanitize()`)**: strips characters that trip up FAT32/exFAT scanners on Sony WM1A / Lotoo / Chord Poly — half + full-width colon (`:`, `：`), straight + curly apostrophes (`'`, `‘`, `’`), exclamation (`!`), plus the reserved invalid path chars (`* ? | " < >`). Colons replaced with ` - ` (space-hyphen-space).
+**Filesystem-safe naming (`sanitize()`)**: strips characters that trip up FAT32/exFAT scanners on Sony WM1A / Chord Poly — half + full-width colon (`:`, `：`), straight + curly apostrophes (`'`, `‘`, `’`), exclamation (`!`), plus the reserved invalid path chars (`* ? | " < >`). Colons replaced with ` - ` (space-hyphen-space).
 
 ---
 
-### Step 7 — JSON index（索引生成，可选）
-
-Generates `playlists/music_index.json` with full metadata for every track. Skipped with `--no-json`.
-
----
-
-### Step 8 — Orphan cleanup（孤儿文件清理）
+### Step 7 — Orphan cleanup（孤儿文件清理）
 
 1. Collect `expected_files` = all `dest` paths written this run + `dest_dir/folder.jpg` for every album.
-2. Scan `out/MUSIC/` for all audio files, `folder.jpg`, and `.DS_Store` — **skipping `MUSIC/Playlists/`** (its `.m3u` files are written by Step 6 and must not be cleaned up here).
+2. Scan `out/MUSIC/` for all audio files, `folder.jpg`, and `.DS_Store`.
 3. Delete any file not in `expected_files` (`.DS_Store` always deleted).
 4. Remove empty directories bottom-up (a directory is "empty" if it contains only `.DS_Store`).
 
 ---
 
-### Step 9 — Summary report
+### Step 8 — Summary report
 
 Prints track counts by genre and format, total duration, and lists up to 10 files with missing `title`/`artist`/`album` tags.
 
@@ -194,9 +184,8 @@ Prints track counts by genre and format, total duration, and lists up to 10 file
 
 ```bash
 cd <project-dir>
-python3 music_organizer.py            # default: force overwrite + generate JSON
+python3 music_organizer.py            # default: force overwrite
 python3 music_organizer.py --no-force # skip same-size existing files (incremental)
-python3 music_organizer.py --no-json  # skip music_index.json generation
 ```
 
 ---
@@ -306,7 +295,7 @@ Automatically detected: any folder containing a `.cue` file alongside a single l
 
 After every run, the script:
 1. Collects all destination paths written this run.
-2. Scans `out/MUSIC/` for audio files + `folder.jpg` not in that set (skipping `MUSIC/Playlists/`).
+2. Scans `out/MUSIC/` for audio files + `folder.jpg` not in that set.
 3. Deletes orphans (including `.DS_Store`).
 4. Removes empty directories bottom-up.
 
@@ -316,18 +305,16 @@ This means: fix metadata in Picard → re-run script → old wrong-path copies a
 
 ## Playlist generation
 
-All `.m3u` / `.m3u8` files (plus any legacy `by_*/` subdirectories) are deleted and fully regenerated each run.
+All `.m3u` / `.m3u8` files (plus any legacy `playlists/`, `MUSIC/Playlists/`, `by_*/` subdirectories from prior runs) are deleted and fully regenerated each run.
 
-**Path semantics**: relative to each playlist file's own directory (standard M3U, per RFC 8216). The same playlist written to `playlists/` and `MUSIC/Playlists/` gets different `../` prefixes so both resolve correctly.
+**Path semantics**: relative to the SD-card root (`DEST`), no leading `/`, no `..`. Form: `MUSIC/<genre>/<artist>/.../<file>.{ext}`. Sony Walkman resolves this correctly because the .m3u sits at the SD root and Sony uses standard relative-to-playlist resolution. Chord Poly MPD resolves it correctly because MPD uses paths relative to `music_directory` (= SD root).
 
 **DAP compatibility matrix** (all handled by Step 6):
 
 | Device / firmware | Quirk | How the script handles it |
 |---|---|---|
-| Sony WM1A / WM1ZM2 | Only indexes `/MUSIC/`; only reads playlists in `MUSIC/Playlists/` | Capital `MUSIC/` folder; dual-write to `MUSIC/Playlists/` |
-| Lotoo PAW Gold 2017 | Playlist scanner does not recurse into subdirectories; needs UTF-8 BOM for Chinese | Flat directory with `<Category>_<Name>.m3u` prefixes; BOM-prefixed files |
-| Chord Poly (GoFigure) | `.m3u8` unreliable; follows standard M3U path resolution | `.m3u` extension; paths relative to playlist file's own dir |
-| Chord Poly (MPD mode) | Resolves paths relative to `music_directory` setting | Set `music_directory = /path/to/out/MUSIC/` (external MPD config, not script) |
+| Sony WM1A / WM1ZM2 | Only indexes `/MUSIC/` (uppercase); standard M3U path resolution (relative to playlist file) | Capital `MUSIC/` folder; .m3u at SD root, paths `MUSIC/...` resolve to `/MUSIC/...` |
+| Chord Poly (GoFigure / MPD) | `.m3u8` unreliable; MPD paths relative to `music_directory`, not playlist file | `.m3u` extension; paths use `MUSIC/...` (no `/`, no `..`); set `music_directory = /SD root/` |
 | FAT32 / exFAT | Breaks on `:`, `：`, `'`, `‘`, `’`, `!`, `*`, `?`, `|`, etc. | `sanitize()` strips or replaces all of these |
 
-**Why not relative to SD-card root?** An earlier version wrote paths as `Music/Jazz/...` assuming a library root. But a playlist at `playlists/by_album/Artist/X.m3u8` looking for `Music/Jazz/...` makes DAPs search `playlists/by_album/Artist/Music/Jazz/...` — which doesn't exist → empty playlist. Only Chord Poly in MPD mode uses library-root semantics, and that's an external configuration concern, not a playlist-file concern.
+**Why Lotoo PAW Gold 2017 is not supported**: Lotoo's scanner does not parse `..` and requires absolute `/MUSIC/...` paths, but absolute paths break Chord Poly's MPD (which interprets `/` as filesystem root). There is no .m3u path format that satisfies both Lotoo and Poly — the project optimizes for Sony + Poly.

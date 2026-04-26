@@ -16,7 +16,7 @@
    ↓
 【统一文件结构（Sony 友好）】
    ↓
-【生成播放列表（Poly & Sony 各一套）】
+【生成播放列表（Sony / Poly 通用一套）】
 
 ## 🎵 支持格式
 
@@ -34,34 +34,30 @@
 输出目录 `out/` 整盘拷贝到 SD 卡根目录即可直接使用。
 
 ```
-out/
-├── MUSIC/                  ← 大写！Sony WM1A 只扫描 /MUSIC/
+out/                                       ← 整目录拷到 SD 卡根
+├── MUSIC/                                 ← 大写！Sony WM1A 只扫描 /MUSIC/
 │   ├── Jazz/Miles Davis/(1959) Kind of Blue/
 │   ├── Classical/Bach/(1982) Goldberg Variations - Gould/
 │   ├── Cantopop/陈百强/
 │   ├── Mandopop/王菲/
 │   ├── Various/
-│   ├── Test/{Category}/...   ← Test 曲目隔离
-│   └── Playlists/           ← Sony WM1A 专用播放列表（与下方 playlists/ 内容相同）
-│       ├── All.m3u
-│       ├── Album_*.m3u
-│       └── ...
-└── playlists/              ← Lotoo / Chord Poly / 通用
-    ├── All.m3u                          ← 含所有曲目（含 Test）
-    ├── Album_<Artist> - <Album>.m3u     ← 每张专辑
-    ├── Artist_<Artist>.m3u              ← 每位艺术家
-    ├── Format_<FMT>.m3u                 ← 每种格式（FLAC / DSD / WAV / …）
-    ├── Test_<Category>.m3u              ← Test 每个分类一个
-    └── music_index.json                 ← 加 --json 才生成
+│   └── Test/{Category}/...                ← Test 曲目隔离
+├── All.m3u                                ← 含所有曲目（含 Test）
+├── Album_<Artist> - <Album>.m3u           ← 每张专辑
+├── Artist_<Artist>.m3u                    ← 每位艺术家
+├── Format_<FMT>.m3u                       ← 每种格式（FLAC / DSD / WAV / …）
+└── Test_<Category>.m3u                    ← Test 每个分类一个
 ```
 
 **播放列表设计要点**：
-- 扁平目录：Lotoo PAW Gold 2017 的扫描器不递归子目录
+- 单一位置：所有 .m3u 写到 SD 卡根（不再分 `playlists/` 和 `MUSIC/Playlists/`）
+- 路径格式：`MUSIC/Jazz/...`（无前导 `/`，无 `..`）— Sony Walkman 与 Chord Poly 唯一交集
+  - Sony：标准 M3U 相对解析，从 SD 根的 .m3u 看 `MUSIC/...` → `/MUSIC/...` ✓
+  - Poly (MPD)：相对 `music_directory`（= SD 根）解析 `MUSIC/...` ✓
 - `<Category>_<Name>.m3u` 统一命名：同类播放列表在 DAP 界面自动聚拢
 - 扩展名 `.m3u`（不用 `.m3u8`）：Chord Poly GoFigure 对 `.m3u8` 不可靠
-- 编码 UTF-8 + BOM + CRLF：Lotoo / 老版 Poly 需要 BOM 识别中文
-- 路径相对播放列表文件自身所在目录（标准 M3U，不是"相对 SD 卡根"）
-- 同时写到 `playlists/` 和 `MUSIC/Playlists/` 两处，覆盖所有目标设备
+- 编码 UTF-8 + BOM + CRLF：老版 Poly 需要 BOM 识别中文
+- **不兼容 Lotoo PAW Gold 2017**：其扫描器不解析 `..`，需要绝对路径 `/MUSIC/...`，与 Poly 不兼容
 
 ## 🔧 tag 缺失怎么办？
 

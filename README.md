@@ -4,9 +4,11 @@
 
 Automatically scans local music files, reads metadata, organizes them into a clean folder structure, and generates M3U playlists tuned for audiophile DAPs.
 
-**Compatible devices:** Sony HAP-Z1ES · Sony Walkman (NW-WM1Z / WM1A / NW-WM1ZM2) · Chord Mojo+Poly / Hugo · Lotoo PAW Gold 2017.
+**Compatible devices:** Sony HAP-Z1ES · Sony Walkman (NW-WM1Z / WM1A / NW-WM1ZM2) · Chord Mojo+Poly / Hugo.
 
-> 📂 **See [`examples/`](examples/)** for a hand-crafted demo of the input/output structure (0-byte placeholder audio + real `.m3u` / `.json` content).
+> ⚠️ **Lotoo PAW Gold 2017 is not supported.** Its playlist scanner does not handle `..` parent-dir paths and requires absolute `/MUSIC/...` paths, which conflict with Chord Poly's MPD path resolution — no single playlist format covers both.
+
+> 📂 **See [`examples/`](examples/)** for a hand-crafted demo of the input/output structure (0-byte placeholder audio + real `.m3u` content).
 
 ---
 
@@ -32,34 +34,28 @@ brew install ffmpeg
 │   └── Test/                  ← reserved name: test/comparison subset (see below)
 │       ├── Beyerdynamic T1/   ← category label (any name)
 │       └── Audio Format/      ← category label (any name)
-└── out/                       ← organized output (copy whole folder to SD-card root)
-    ├── MUSIC/                 ← UPPERCASE — Sony WM1A only indexes /MUSIC/
-    │   ├── Jazz/              ← normal files grouped by genre
+└── out/                                    ← copy whole folder to SD-card root
+    ├── MUSIC/                              ← UPPERCASE — Sony WM1A only indexes /MUSIC/
+    │   ├── Jazz/                           ← normal files grouped by genre
     │   │   └── Miles Davis/
     │   │       └── (1959) Kind of Blue/
     │   ├── Classical/
     │   ├── Cantopop/
     │   ├── Mandopop/
     │   ├── Various/
-    │   ├── Test/              ← Test files isolated here
-    │   │   ├── Beyerdynamic T1/
-    │   │   │   └── Jazz/Miles Davis/...
-    │   │   └── Audio Format/
-    │   │       └── Mandopop/陳慧嫻/...
-    │   └── Playlists/         ← Sony WM1A exclusive playlist directory
-    │       ├── All.m3u
-    │       ├── Album_*.m3u
-    │       └── ...
-    └── playlists/             ← Lotoo PAW Gold 2017 / Chord Poly / generic
-        ├── All.m3u                       ← all tracks (incl. Test)
-        ├── Album_<Artist> - <Album>.m3u  ← one per album
-        ├── Artist_<Artist>.m3u           ← one per artist
-        ├── Format_<FMT>.m3u              ← grouped by format (FLAC/DSD/WAV/…)
-        ├── Test_<Category>.m3u           ← one per Test category
-        └── music_index.json              ← skipped with --no-json
+    │   └── Test/                           ← Test files isolated here
+    │       ├── Beyerdynamic T1/
+    │       │   └── Jazz/Miles Davis/...
+    │       └── Audio Format/
+    │           └── Mandopop/陳慧嫻/...
+    ├── All.m3u                             ← all tracks (incl. Test)
+    ├── Album_<Artist> - <Album>.m3u        ← one per album
+    ├── Artist_<Artist>.m3u                 ← one per artist
+    ├── Format_<FMT>.m3u                    ← grouped by format (FLAC/DSD/WAV/…)
+    └── Test_<Category>.m3u                 ← one per Test category
 ```
 
-> **Flat layout + `<Category>_<Name>` naming**: Lotoo PAW Gold 2017's playlist scanner does **not** recurse into subdirectories, so all playlists live directly under `playlists/`. The `Album_` / `Artist_` / `Format_` / `Test_` prefixes group related playlists together in the DAP UI. The extension is `.m3u` (not `.m3u8`) because Chord Poly's GoFigure app is unreliable with `.m3u8`.
+> **All playlists live at the SD-card root** (a single location that both Sony Walkman and Chord Poly can read — see "SD-card DAP compatibility notes" below). The `Album_` / `Artist_` / `Format_` / `Test_` prefixes group related playlists together in the DAP UI. The extension is `.m3u` (not `.m3u8`) because Chord Poly's GoFigure app is unreliable with `.m3u8`.
 
 ### The `Test/` directory
 
@@ -77,7 +73,7 @@ brew install ffmpeg
 | Output path | `out/MUSIC/{Genre}/{Artist}/...` | `out/MUSIC/Test/{Category}/{Genre}/{Artist}/...` |
 | `All.m3u` | included | **included** |
 | `Album_*` / `Artist_*` / `Format_*` | included | **excluded** |
-| Dedicated playlist | — | `playlists/Test_{Category}.m3u` |
+| Dedicated playlist | — | `out/Test_{Category}.m3u` |
 
 > All files under the same `Test/{Category}/` are merged into one `Test_{Category}.m3u`. Filenames containing FAT32/exFAT-sensitive characters (`:`, `?`, `'`, etc.) are sanitized.
 
@@ -88,17 +84,11 @@ brew install ffmpeg
 ```bash
 cd <project-dir>
 
-# Default: force-overwrite all files + generate music_index.json
+# Default: force-overwrite all files
 python3 music_organizer.py
 
 # Incremental: skip existing files with matching size
 python3 music_organizer.py --no-force
-
-# Skip JSON index generation
-python3 music_organizer.py --no-json
-
-# Incremental + no JSON
-python3 music_organizer.py --no-force --no-json
 ```
 
 ### Flags
@@ -106,7 +96,6 @@ python3 music_organizer.py --no-force --no-json
 | Flag | Description |
 |------|-------------|
 | `--no-force` | Skip existing files with matching size (default: force overwrite) |
-| `--no-json` | Don't generate `music_index.json` (default: generate it) |
 
 ---
 
@@ -150,10 +139,8 @@ in/ raw files
 ⑥ Generate M3U playlists (full rebuild, flat <Category>_<Name>.m3u naming)
      → All.m3u, Album_*, Artist_*, Format_*
      → Test_<Category>.m3u for each Test subset
-     → Written to both playlists/ and MUSIC/Playlists/
-     → UTF-8 + BOM + CRLF; paths relative to each playlist file's own directory
-   ↓
-⑦ Generate music_index.json (skipped with --no-json)
+     → Written to SD-card root (out/) — single location for Sony + Poly
+     → UTF-8 + BOM + CRLF; paths in MUSIC/<genre>/... form (no leading slash, no ..)
 ```
 
 ---
@@ -219,26 +206,26 @@ Copy the entire `out/` folder to your SD card root and the playlists work direct
 
 | Device / firmware | Quirk handled | How the script addresses it |
 |-------------------|---------------|----------------------------|
-| **Sony WM1A / WM1ZM2** | Only indexes `/MUSIC/` (uppercase); only reads playlists in `MUSIC/Playlists/` | Music dir named `MUSIC/`; playlists dual-written to `MUSIC/Playlists/` |
-| **Lotoo PAW Gold 2017** | Playlist scanner does **not** recurse into subdirectories; needs UTF-8 BOM for Chinese | Flat layout with `<Category>_<Name>.m3u` prefixes; files written with BOM |
-| **Chord Poly (GoFigure)** | Unreliable with `.m3u8` extension; standard M3U path resolution (relative to playlist file) | Extension is `.m3u`; paths use `os.path.relpath(track, pl_file.parent)` |
+| **Sony WM1A / WM1ZM2** | Only indexes `/MUSIC/` (uppercase); standard M3U path resolution (relative to playlist file) | Music dir named `MUSIC/`; .m3u files at SD root use `MUSIC/...` paths that resolve correctly |
+| **Chord Poly (GoFigure / MPD)** | MPD resolves paths relative to `music_directory`, not the playlist file. Unreliable with `.m3u8` extension | .m3u files use `MUSIC/...` paths (no leading `/`, no `..`); set MPD `music_directory = /SD root/` |
 | **FAT32 / exFAT filesystems** | Half-width colon, question mark, straight + curly apostrophes (`‘ ’`), exclamation will trip up scanners | `sanitize()` strips/replaces `: ： ' ‘ ’ ! * ? \| " < >` and other invalid chars |
 
-**Playlist relative-path format (important):**
+**Playlist path format (the Sony + Poly common ground):**
 
 ```
 #EXTM3U
 #EXTENC:UTF-8
 
 #EXTINF:243,Miles Davis - So What
-../MUSIC/Jazz/Miles Davis/(1959) Kind of Blue/01 - So What.flac
+MUSIC/Jazz/Miles Davis/(1959) Kind of Blue/01 - So What.flac
 ```
 
-- Paths are relative to **the playlist file's own directory** (standard M3U / RFC 8216 semantics) — not relative to the SD-card root.
+- Paths use the `MUSIC/<genre>/...` form — **no leading `/`, no `..`** parent traversal.
+- This is the only format that resolves correctly on **both** Sony Walkman (standard M3U, relative to .m3u location at SD root) **and** Chord Poly's MPD (relative to `music_directory`, also SD root).
 - File encoding: UTF-8 + BOM (`EF BB BF`), CRLF line endings.
 - Extension: `.m3u` (not `.m3u8`).
 
-**Chord Poly MPD-mode exception:** If you're using Poly's MPD server mode (rather than local SD-card playback), MPD resolves paths relative to its `music_directory` setting, not the playlist file's location. In that case, set `music_directory = /path/to/out/MUSIC/` in your MPD config — this is external configuration, not handled by the script.
+> **Why Lotoo PAW Gold 2017 isn't supported:** Lotoo's playlist scanner does not handle `..` and requires absolute `/MUSIC/...` paths, which break Chord Poly's MPD (it interprets `/` as filesystem root). There is no single .m3u format that satisfies all three devices, so this project optimizes for Sony + Poly.
 
 ---
 
