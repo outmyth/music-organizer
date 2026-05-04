@@ -489,6 +489,23 @@ def _has_garbled(tags: dict) -> bool:
     return False
 
 
+# URL / download-site watermarks that some Chinese rip sources stuff into
+# tag fields (especially album_artist). Treat as missing.
+_JUNK_TAG_RE = re.compile(
+    r'^\s*(?:https?://|www\.)'              # http://… or www.…
+    r'|\.(?:com|net|org|cn|io|tv)\b'        # any TLD-looking suffix
+    r'|公众号|下载站',                        # zh: "WeChat public account", "download site"
+    re.I,
+)
+
+
+def _clean_junk(s: str) -> str:
+    """Return '' if the value is a URL/website watermark, else the original."""
+    if not s:
+        return ''
+    return '' if _JUNK_TAG_RE.search(s) else s
+
+
 def probe(path: Path) -> dict:
     r = run(['ffprobe','-v','quiet','-print_format','json',
              '-show_format','-show_streams', str(path)])
@@ -500,11 +517,18 @@ def probe(path: Path) -> dict:
     tags   = {k.lower(): v for k, v in fmt.get('tags', {}).items()}
     audio  = next((s for s in data.get('streams',[])
                    if s.get('codec_type') == 'audio'), {})
+
+    # Strip junk watermarks (URLs, "WWW.HIFI369.COM" style download-site stamps)
+    # from artist / album_artist / album fields BEFORE the fallback chain.
+    raw_artist       = _clean_junk(tags.get('artist', ''))
+    raw_album_artist = _clean_junk(tags.get('album_artist', ''))
+    raw_album        = _clean_junk(tags.get('album', ''))
+
     result = {
         'title':        tags.get('title', ''),
-        'artist':       tags.get('artist', tags.get('album_artist', '')),
-        'album_artist': tags.get('album_artist', tags.get('artist', '')),
-        'album':        tags.get('album', ''),
+        'artist':       raw_artist or raw_album_artist,
+        'album_artist': raw_album_artist or raw_artist,
+        'album':        raw_album,
         'genre':        tags.get('genre', ''),
         'date':         tags.get('date', ''),
         'track':        tags.get('track', ''),
@@ -518,8 +542,11 @@ def probe(path: Path) -> dict:
     if _MUTAGEN_OK and path.suffix.lower() == '.wav' and _has_garbled(result):
         mu = _probe_wav_mutagen(path)
         for key in ('title', 'artist', 'album_artist', 'album', 'genre', 'date', 'track', 'disc'):
-            if mu.get(key):
-                result[key] = mu[key]
+            v = mu.get(key)
+            if v and key in ('artist', 'album_artist', 'album'):
+                v = _clean_junk(v)
+            if v:
+                result[key] = v
     return result
 
 
@@ -1214,7 +1241,8 @@ def main(force: bool = False):
             else:
                 shutil.copy2(fp, dest_fp)
             status = "📝" if needs_tag_write else "✅"
-            print(f"   {status}  {genre}/{artist}/{alb_folder}/{dest_fn}")
+            prefix = f"Test/{cat}/" if cat else ""
+            print(f"   {status}  {prefix}{genre}/{artist}/{alb_folder}/{dest_fn}")
         else:
             print(f"   ⏭  {dest_fn}")
 
