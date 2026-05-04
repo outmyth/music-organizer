@@ -1048,20 +1048,42 @@ def main(force: bool = False):
             if not meta.get('album_artist'):
                 meta['album_artist'] = meta.get('album artist', 'Various')
 
-        # Fallback to inferred data
-        inf = infer_from_path(fp)
+        # Fallback to inferred data — track which fields came from path inference
+        # so AcoustID can later override placeholder values (e.g. album = folder name)
+        # without clobbering high-confidence values from embedded tags or parsers.
+        inf            = infer_from_path(fp)
+        inferred_only  = set()
         for field in ('title','artist','album_artist','album','date','track','genre','disc'):
             if not meta.get(field):
-                # Prefer parsed over inferred
-                meta[field] = parsed.get(field, inf.get(field, ''))
+                if parsed.get(field):
+                    meta[field] = parsed[field]
+                elif inf.get(field):
+                    meta[field] = inf[field]
+                    inferred_only.add(field)
 
-        # AcoustID fingerprint lookup — only when title or artist are still missing
-        # AND no ALBUM_META override applies (which would supply them anyway).
-        if not override and (not meta.get('title') or not meta.get('artist')):
+        # AcoustID fingerprint lookup. Conservative override policy:
+        #   • title / artist : only filled if completely MISSING. Filename-parsed
+        #     values are kept as-is — avoids simp↔trad churn (e.g. 红日 → 紅日).
+        #   • album          : filled if missing OR if value came from path
+        #     inference (folder-name placeholder like '李克勤' for the album).
+        #   • date           : filled if missing.
+        if not override and (
+            not meta.get('title')
+            or not meta.get('artist')
+            or not meta.get('album') or 'album' in inferred_only
+        ):
             aid = acoustid_lookup(fp)
-            for field in ('title', 'artist', 'album', 'date'):
+            # Only fill missing title/artist; never overwrite filename-parsed text
+            for field in ('title', 'artist'):
                 if not meta.get(field) and aid.get(field):
                     meta[field] = aid[field]
+            # Album: replace path-inferred placeholder, or fill if missing
+            if aid.get('album') and (not meta.get('album') or 'album' in inferred_only):
+                meta['album'] = aid['album']
+            # Date: fill if missing
+            if aid.get('date') and not meta.get('date'):
+                meta['date'] = aid['date']
+            # album_artist: fill if missing only
             if aid.get('artist') and not meta.get('album_artist'):
                 meta['album_artist'] = aid['artist']
 
