@@ -210,14 +210,57 @@ Prints track counts by genre and format, total duration, and lists up to 10 file
 
 ---
 
+## External tools and libraries
+
+The script uses the following dependencies. `_ensure_deps()` auto-installs each
+on first run via `pip` (Python packages) or `brew` / `apt` (system tools).
+
+### System binaries
+
+| Tool | Used for | Required? | Auto-install |
+|------|---------|-----------|---------------|
+| `ffmpeg` | Re-encode + write metadata when `ALBUM_META` / parsers fix tags during copy; CUE-image splitting | **Yes** — script exits if missing | `brew install ffmpeg` / `apt install ffmpeg` |
+| `ffprobe` (ships with ffmpeg) | Read embedded tags from every audio file (Step ① in pipeline) | **Yes** | bundled with ffmpeg |
+| `fpcalc` (chromaprint) | Generate Chromaprint acoustic fingerprint for AcoustID lookup | Optional — AcoustID step skipped if missing | `brew install chromaprint` / `apt install libchromaprint-tools` |
+
+### Python packages
+
+| Package | Used for | Required? | Install |
+|---------|---------|-----------|---------|
+| `mutagen` | Fallback to read ID3 chunk in WAV files when `ffprobe` returns garbled `?` (INFO chunk encoding mismatch) | Yes | `pip install mutagen` |
+| `opencc-python-reimplemented` | Traditional → Simplified Chinese for artist name canonicalization (so 陳慧嫻 and 陈慧娴 share one folder) | Yes | `pip install opencc-python-reimplemented` |
+
+Standard library only: `os`, `json`, `shutil`, `re`, `subprocess`, `sys`,
+`tempfile`, `time`, `urllib.request`, `urllib.parse`, `pathlib`, `collections`.
+No third-party HTTP / JSON / web-scraping libraries.
+
+### External web APIs
+
+| API | Endpoint | Used for | Auth |
+|-----|----------|---------|------|
+| MusicBrainz | `musicbrainz.org/ws/2/artist` | Look up artist genre tags as last-resort genre fallback | None — public, rate-limited to 1 req/sec via User-Agent header |
+| AcoustID | `api.acoustid.org/v2/lookup` | Identify track by Chromaprint fingerprint, return MusicBrainz recording IDs + release info | API key required; read from `ACOUSTID_API_KEY` env var or `.acoustid_key` file in project root (gitignored) |
+
+### Local cache files
+
+| File | Holds | Lifecycle |
+|------|------|-----------|
+| `.mb_cache.json` | Artist → genre, persisted after each MusicBrainz lookup | Committed to git so cache survives across machines |
+| `.acoustid_cache.json` | `path::size` → AcoustID match dict, prevents repeat fingerprint lookups | Committed to git |
+| `.acoustid_key` | AcoustID API key | **Gitignored** — never committed |
+
+---
+
 ## Running the script
 
 ```bash
 cd <project-dir>
 python3 music_organizer.py               # default: force overwrite
 python3 music_organizer.py --no-force    # skip same-size existing files (incremental)
-python3 music_organizer.py --audit-genres  # compare ARTIST_GENRE vs MusicBrainz
 ```
+
+Audit (which `ARTIST_GENRE` entries are now redundant) is automatic — printed
+in the summary report at the end of every run.
 
 ---
 
