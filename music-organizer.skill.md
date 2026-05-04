@@ -102,12 +102,19 @@ For each audio file, metadata is resolved through a layered pipeline:
    - For "{track}. {X} - {Y}" filenames, checks ancestors / ARTIST_GENRE /
      MB cache to determine which token is artist vs title
         ↓
-④ Merge: parsed > inferred (fills missing fields only)
+④ Merge: parsed > inferred (fills missing fields only).
+   Track which fields came from inference (`inferred_only` set) — needed
+   so AcoustID can later replace path-inferred placeholders.
         ↓
 ④.5 acoustid_lookup(fp) — fingerprint via fpcalc + AcoustID API
-     Only fires if title or artist still missing AND no ALBUM_META override.
-     Requires ACOUSTID_API_KEY env var (or .acoustid_key file).
-     Cached in .acoustid_cache.json by file path + size.
+     Conservative override policy:
+       • title / artist : only fills if MISSING (never overwrites
+         filename-parsed text — avoids 红日 → 紅日 simp↔trad churn).
+       • album          : fills if missing OR if value was path-inferred
+         (e.g. '李克勤' as the album for files inside '李克勤/DISC 4/').
+       • date           : fills if missing.
+     Skipped entirely when ALBUM_META override applies, when folder
+     was flagged as a compilation (see Step 2.5), or when API key not set.
         ↓
 ⑤ ALBUM_META override applied (highest priority for album/artist/genre/year)
    parsed track/title overrides album-level override for those fields
@@ -116,6 +123,15 @@ For each audio file, metadata is resolved through a layered pipeline:
    priority: ALBUM_META → ARTIST_GENRE → GENRE_MAP → JAZZ_TITLES →
              Chinese chars → MusicBrainz API → 'Various'
 ```
+
+**Compilation guard (Step 2.5)** — runs once before Step 3, only if AcoustID
+API key is set. Groups `audio_files` by source folder, then for each folder
+with ≥2 files lacking embedded album tags (and not covered by `ALBUM_META`):
+looks up AcoustID for every file. If results disagree (≥2 distinct albums),
+the folder is flagged as a *compilation* — Step ④.5 will skip the album +
+date overrides for those files, keeping the path-derived placeholder so the
+songs stay grouped on disk. Without this guard, a 9-song "Best of 唐朝乐队"
+folder gets scattered to 4 different MB releases.
 
 **Destination path formula:**
 ```
@@ -320,7 +336,13 @@ ffmpeg -i input.wav -metadata title="Title" -metadata artist="Artist" \
 
 **Pipeline:** runs `fpcalc` (chromaprint) on the file → POSTs fingerprint + duration to `api.acoustid.org/v2/lookup` → picks the highest-scoring recording (≥0.7) → fills in title/artist/album/date.
 
-**When triggered:** only after embedded tags + path inference fail to provide title and artist (and no ALBUM_META override applies). This minimizes API calls and avoids overriding good local data.
+**When triggered:** title/artist missing OR album missing OR album was only filled by path inference (placeholder like the artist name reused as album). Skipped when `ALBUM_META` override applies, or when the source folder was flagged as a compilation.
+
+**Override policy (conservative):**
+- `title` / `artist` — only filled if missing. Filename-parsed text is preserved verbatim (don't churn 红日 → 紅日).
+- `album` — replaces path-inferred placeholder OR fills if missing.
+- `date` — fills if missing.
+- Real embedded-tag values are NEVER overridden.
 
 **Setup:**
 1. Register a free application at https://acoustid.org/new-application — get API key
@@ -331,6 +353,46 @@ ffmpeg -i input.wav -metadata title="Title" -metadata artist="Artist" \
 **Cache:** `.acoustid_cache.json`, keyed by `path::size` so identical paths skip refetch. Commit to git to persist across machines.
 
 **Without API key:** prints a one-time hint when an eligible file appears, then silently skips.
+
+**API quirks discovered (2025-05-04 debugging session):**
+- `urllib.parse.urlencode()` escapes `+` to `%2B`, but AcoustID uses literal `+` as the meta-type separator. Build the body with urlencode for normal fields, then append `&meta=recordings+releases+compress` verbatim.
+- `meta=recordings+releasegroups+releases` returns recordings WITHOUT the releases field — adding `releasegroups` suppresses `releases`. Use `meta=recordings+releases+compress` only.
+- AcoustID does NOT accept repeated `meta=` parameters; only the `+`-separated form works.
+
+---
+
+### 5. Compilation folder guard
+
+**Added:** Step 2.5 — runs before individual file processing. Detects folders that should be treated as compilations to keep their songs grouped together.
+
+**Why needed:** AcoustID returns the highest-scoring single MusicBrainz release per recording. A given song typically appears on 10–18 different releases (compilations, remasters, regional editions). When 9 songs from a "Best of" folder each match different releases, naive AcoustID-fills scatter the folder across 4–9 destination album folders.
+
+**Detection rule:**
+1. Group `audio_files` by `fp.parent`.
+2. Skip folders covered by `ALBUM_META` overrides.
+3. Skip single-file folders.
+4. Skip folders where every file has an embedded album tag.
+5. For surviving candidates, look up AcoustID album for each file.
+6. If `len(distinct AcoustID albums) >= 2` → flag the folder as a compilation.
+
+**Effect on flagged folders:**
+- Step ④.5 skips both `album` and `date` overrides → keeps path-inferred album and leaves date empty.
+- Result: all songs land in one shared `{Artist}/{folder-name}/` directory.
+
+**Real-world examples:**
+- `唐朝乐队/` — 9 songs across 4 MB albums (中國火 1992, 演义 1999, 梦回唐朝 2008, 美麗新世界 2020). With guard: all in `Chinese Rock/唐朝乐队/唐朝乐队/`.
+- `李克勤/DISC 4/` — 3 songs across 3 MB albums (Custom Made 2003, 最好李克勤MD 2001, Purple Dream). With guard: all in `Mandopop/李克勤/李克勤/`.
+- `Test/Audio Format/卢冠廷 - 一生所爱/` — 3 different format versions (DSF/FLAC/WAV) of the same song, but AcoustID maps each to a different release. With guard: kept together.
+
+---
+
+### 6. Filename `{track}. {X} - {Y}` order ambiguity
+
+**Symptom:** files like `03. 红日 - 李克勤.wav` ended up under `Mandopop/红日/红日/` (artist↔title swapped) — the original regex assumed `{track}. {artist} - {title}`.
+
+**Fix:** `infer_from_path()` now uses ancestor folder names + `ARTIST_GENRE` keys + `_MB_CACHE` to disambiguate which token is the artist. If `Y` matches a known artist (or appears in any ancestor folder name) and `X` doesn't, treat as `{track}. {title} - {artist}`.
+
+**Related fix:** when the immediate parent folder matches `DISC|CD|Disk|Disc \s*\d*`, step up to the grandparent for artist/album inference. The disc number is captured into the `disc` field.
 
 ---
 
