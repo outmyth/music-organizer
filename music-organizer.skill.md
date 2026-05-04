@@ -240,7 +240,9 @@ No third-party HTTP / JSON / web-scraping libraries.
 | API | Endpoint | Used for | Auth |
 |-----|----------|---------|------|
 | MusicBrainz | `musicbrainz.org/ws/2/artist` | Look up artist genre tags as last-resort genre fallback | None — public, rate-limited to 1 req/sec via User-Agent header |
+| MusicBrainz | `musicbrainz.org/ws/2/release` | Find release MBID for cover art search (artist+album, fallback album-only for tribute releases) | None — same 1 req/sec limit shared with the genre lookup |
 | AcoustID | `api.acoustid.org/v2/lookup` | Identify track by Chromaprint fingerprint, return MusicBrainz recording IDs + release info | API key required; read from `ACOUSTID_API_KEY` env var or `.acoustid_key` file in project root (gitignored) |
+| Cover Art Archive | `coverartarchive.org/release/{mbid}/front-500` and `…/release-group/{mbid}/front-500` | Download front cover for album folders missing folder.jpg | None — public, no key |
 
 ### Local cache files
 
@@ -248,6 +250,7 @@ No third-party HTTP / JSON / web-scraping libraries.
 |------|------|-----------|
 | `.mb_cache.json` | Artist → genre, persisted after each MusicBrainz lookup | Committed to git so cache survives across machines |
 | `.acoustid_cache.json` | `path::size` → AcoustID match dict, prevents repeat fingerprint lookups | Committed to git |
+| `.caa_cache.json` | `artist::album::year` → release MBID or `"not_found"`, prevents re-querying MB for missing covers | Committed to git |
 | `.acoustid_key` | AcoustID API key | **Gitignored** — never committed |
 
 ---
@@ -472,7 +475,28 @@ ffmpeg -i input.wav -metadata title="Title" -metadata artist="Artist" \
 
 ---
 
-### 6d. Traditional ↔ Simplified Chinese artist split
+### 6d. Album folders without cover.jpg / folder.jpg
+
+**Symptom:** some albums (e.g. `Mandopop/陈奕迅/(2012) ReImagine Leslie Cheung/`) had no `folder.jpg` because the original source folder didn't ship one. DAPs show a blank album tile.
+
+**Fix:** Step 5b downloads missing covers from **Cover Art Archive** (`coverartarchive.org`, MusicBrainz's official cover art repo, free, no API key).
+
+**Pipeline:**
+1. After Step 5 source-side cover copy, iterate every dest album folder still missing `folder.jpg`.
+2. Skip folders whose artist is a Various-marker — MB release search needs a real performer.
+3. Search MusicBrainz: first `release:"<album>" AND artist:"<artist>" AND date:<year>`. If empty, fall back to `release:"<album>" AND date:<year>` only — catches Various-Artists tribute releases where the per-track artist won't match the release-level artist.
+4. Hit `coverartarchive.org/release/{mbid}/front-500`, fall back to `release-group/{mbid}/front-500`.
+5. Save first ≥1KB response as `dest_dir/folder.jpg`.
+
+**Cache:** `.caa_cache.json` stores `{"<artist>::<album>::<year>": "<mbid>" or "not_found"}`. Misses are remembered so subsequent runs don't re-query MB. Committed to git.
+
+**Rate limit:** shares the existing 1 req/sec MusicBrainz rate limiter (no extra config).
+
+**Real-world result on the current library:** 6/32 missing covers auto-filled on first run, including ReImagine Leslie Cheung, Akina Nakamori AKINA BOX 1982-1991, 蔡琴 (1996) 民歌, 陈奕迅 (2003) 七, etc.
+
+---
+
+### 6e. Traditional ↔ Simplified Chinese artist split
 
 **Symptom:** the same artist landed in two folders — `Mandopop/陳慧嫻/` (from embedded tags) AND `Mandopop/陈慧娴/` (from CUE-split files using folder name). Same person, same library, two homes.
 

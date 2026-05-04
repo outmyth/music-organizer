@@ -434,6 +434,102 @@ def acoustid_lookup(fp: Path) -> dict:
 _aid_load_cache()
 
 
+# ── Cover Art Archive (CAA) — automatic cover download ────────────────────────
+# When a destination album folder ends up without folder.jpg (no cover found
+# in the source), search MusicBrainz for the release and pull the front cover
+# from coverartarchive.org. Free, no API key required.
+_CAA_CACHE_PATH = _HERE / '.caa_cache.json'
+_CAA_CACHE: dict = {}
+
+
+def _caa_load_cache() -> None:
+    global _CAA_CACHE
+    if _CAA_CACHE_PATH.exists():
+        try:
+            _CAA_CACHE = json.loads(_CAA_CACHE_PATH.read_text(encoding='utf-8'))
+        except Exception:
+            _CAA_CACHE = {}
+
+
+def _caa_save_cache() -> None:
+    try:
+        _CAA_CACHE_PATH.write_text(
+            json.dumps(_CAA_CACHE, ensure_ascii=False, indent=2), encoding='utf-8')
+    except Exception:
+        pass
+
+
+def _mb_search_release(artist: str, album: str, year: str = '') -> str:
+    """Find a MusicBrainz release MBID for artist+album. '' if none found.
+    Tries artist-filtered search first; falls back to album+year only (covers
+    Various-Artists tribute releases where the per-track artist won't match)."""
+    if not album:
+        return ''
+
+    def _query(q: str) -> str:
+        url  = f'https://musicbrainz.org/ws/2/release?query={urllib.parse.quote(q)}&limit=3&fmt=json'
+        data = _mb_get(url)
+        rels = data.get('releases', [])
+        return rels[0].get('id', '') if rels else ''
+
+    # Stage 1: artist + album (+ year)
+    if artist:
+        parts = [f'release:"{album}"', f'artist:"{artist}"']
+        if year:
+            parts.append(f'date:{year}')
+        mbid = _query(' AND '.join(parts))
+        if mbid:
+            return mbid
+
+    # Stage 2: album-only (+ year). Catches Various-Artists tribute releases.
+    parts = [f'release:"{album}"']
+    if year:
+        parts.append(f'date:{year}')
+    return _query(' AND '.join(parts))
+
+
+def fetch_cover_art(artist: str, album: str, year: str, dest_path: Path) -> bool:
+    """Download front cover from CAA → dest_path. Return True on success.
+    Caches outcome (mbid or 'not_found') in .caa_cache.json so misses don't
+    re-query MusicBrainz on future runs."""
+    if not (artist and album):
+        return False
+
+    cache_key = f"{artist}::{album}::{year}"
+    cached    = _CAA_CACHE.get(cache_key)
+
+    if cached == 'not_found':
+        return False
+    mbid = cached if cached else _mb_search_release(artist, album, year)
+
+    if not mbid:
+        _CAA_CACHE[cache_key] = 'not_found'
+        _caa_save_cache()
+        return False
+    if not cached:
+        _CAA_CACHE[cache_key] = mbid
+        _caa_save_cache()
+
+    # Try release first, then release-group (broader match across editions)
+    for endpoint in (f'https://coverartarchive.org/release/{mbid}/front-500',
+                     f'https://coverartarchive.org/release-group/{mbid}/front-500'):
+        try:
+            req = urllib.request.Request(endpoint, headers={
+                'User-Agent': 'MusicOrganizer/2.0 (outmyth@gmail.com)',
+            })
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = resp.read()
+                if len(data) > 1000:   # plausibility check (real images are >1KB)
+                    dest_path.write_bytes(data)
+                    return True
+        except Exception:
+            continue
+    return False
+
+
+_caa_load_cache()
+
+
 # ── Album-level overrides (keyed by substring of folder name) ─────────────────
 # When embedded tags are incomplete/wrong, these values take precedence.
 ALBUM_META = {
@@ -1398,6 +1494,31 @@ def main(force: bool = False):
             shutil.copy2(cover_src, dst_art)
             art_copied += 1
     print(f"   ✅  {art_copied} cover art file(s) copied.")
+
+    # ── Step 5b: Download missing covers from Cover Art Archive ───────────────
+    art_downloaded = 0
+    art_attempted  = 0
+    seen           = set()
+    for t in all_tracks:
+        dest_dir = t.get('dest_dir')
+        if not dest_dir or dest_dir in seen:
+            continue
+        seen.add(dest_dir)
+        dst_art = dest_dir / 'folder.jpg'
+        if dst_art.exists():
+            continue
+        artist = t.get('album_artist') or t.get('artist') or ''
+        album  = t.get('album', '')
+        yr     = t.get('year', '')
+        # Skip "Various"-marker artists — release search needs a real performer
+        if _is_various_marker(artist) or not artist or not album:
+            continue
+        art_attempted += 1
+        if fetch_cover_art(artist, album, yr, dst_art):
+            art_downloaded += 1
+            print(f"   🌐  CAA: {dest_dir.relative_to(DEST)}/folder.jpg")
+    if art_attempted:
+        print(f"   ✅  Downloaded {art_downloaded}/{art_attempted} from Cover Art Archive.")
 
     # ── Step 6: Generate playlists ────────────────────────────────────────────
     # Single output location: SD card root (= DEST). Paths inside use the
