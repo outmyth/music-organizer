@@ -36,6 +36,15 @@ def _ensure_deps() -> None:
                        check=True)
         print("    ✅  mutagen installed")
 
+    # --- Python: opencc-python-reimplemented (trad ↔ simp Chinese conversion) ---
+    try:
+        import opencc  # noqa: F401
+    except ImportError:
+        print("📦  Installing opencc-python-reimplemented …")
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '--quiet',
+                        'opencc-python-reimplemented'], check=True)
+        print("    ✅  opencc installed")
+
     # --- System tools ---
     # ffmpeg/ffprobe are required; fpcalc is optional (enables AcoustID lookup).
     def _have(tool: str) -> bool:
@@ -72,6 +81,17 @@ try:
 except ImportError:
     _MUTAGEN_OK = False
 
+# OpenCC: traditional → simplified Chinese converter (used to dedupe artist names
+# like 陳慧嫻 vs 陈慧娴 — same artist but different scripts in tags vs filenames).
+try:
+    import opencc as _opencc
+    _OCC = _opencc.OpenCC('t2s')        # traditional → simplified
+    def canonicalize(s: str) -> str:
+        return _OCC.convert(s) if s else s
+except ImportError:
+    def canonicalize(s: str) -> str:
+        return s
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _HERE      = Path(__file__).parent
 SOURCE     = _HERE / "in"
@@ -105,8 +125,9 @@ ARTIST_GENRE = {
     'eva cassidy':   'Jazz',
     # CUE album default-genre bug fix (2025-05-04): keep until MB covers these reliably
     '陈慧娴':         'Mandopop',
-    '陳慧嫻':         'Mandopop',
 }
+# Canonicalize all keys (trad → simp) so matching is script-agnostic.
+ARTIST_GENRE = {canonicalize(k): v for k, v in ARTIST_GENRE.items()}
 
 GENRE_MAP = {
     'jazz':'Jazz','jazz vocal':'Jazz','vocal jazz':'Jazz','bossa nova':'Jazz',
@@ -794,7 +815,7 @@ def split_cue_album(cue_path: Path, album_meta_override: dict,
         ext      = Path(audio_src).suffix
 
         # Apply album overrides
-        final_artist = album_meta_override.get('artist', artist)
+        final_artist = canonicalize(album_meta_override.get('artist', artist))
         final_album  = album_meta_override.get('album', alb_ttl)
         final_genre  = album_meta_override.get('genre', '')
         if not final_genre:
@@ -1140,6 +1161,13 @@ def main(force: bool = False):
         for k in ('track','title'):
             if parsed.get(k):
                 meta[k] = parsed[k]
+
+        # Canonicalize Chinese artist names (trad → simp) so 陳慧嫻 and 陈慧娴
+        # don't end up in two separate folders. Only artist fields — leave
+        # title/album as authored.
+        for k in ('artist', 'album_artist'):
+            if meta.get(k):
+                meta[k] = canonicalize(meta[k])
 
         genre  = classify_genre(meta)
         yr     = year(meta.get('date',''))

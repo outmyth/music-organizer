@@ -386,7 +386,22 @@ ffmpeg -i input.wav -metadata title="Title" -metadata artist="Artist" \
 
 ---
 
-### 6. Filename `{track}. {X} - {Y}` order ambiguity
+### 6. Traditional ↔ Simplified Chinese artist split
+
+**Symptom:** the same artist landed in two folders — `Mandopop/陳慧嫻/` (from embedded tags) AND `Mandopop/陈慧娴/` (from CUE-split files using folder name). Same person, same library, two homes.
+
+**Root cause:** Cantopop / Mandopop CD rips often have artist tags written in traditional Chinese while the user's local folder/file names use simplified. There's no built-in normalization, so `sanitize()` produces two different folder names downstream.
+
+**Fix:** use OpenCC to canonicalize all artist fields to simplified Chinese. `canonicalize(s)` is called on:
+- `meta['artist']` and `meta['album_artist']` after all sources merged (individual file path)
+- `final_artist` in `split_cue_album()` (CUE path)
+- `ARTIST_GENRE` keys at module load time (so matching is script-agnostic)
+
+**Library:** `opencc-python-reimplemented` — pure Python, auto-installed via pip on first run. Uses the `t2s` converter (traditional → simplified). Title and album are deliberately NOT canonicalized — those reflect the album's authored character form.
+
+---
+
+### 7. Filename `{track}. {X} - {Y}` order ambiguity
 
 **Symptom:** files like `03. 红日 - 李克勤.wav` ended up under `Mandopop/红日/红日/` (artist↔title swapped) — the original regex assumed `{track}. {artist} - {title}`.
 
