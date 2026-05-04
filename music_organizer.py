@@ -1012,6 +1012,44 @@ def main(force: bool = False):
             t['test_category'] = cat
         all_tracks.extend(tracks)
 
+    # ── Step 2.5: Detect compilation folders ──────────────────────────────────
+    # If multiple files in the same source folder lack embedded album tags AND
+    # AcoustID would assign them to different albums, treat the folder as a
+    # compilation and keep the folder name as the album. Prevents scattering
+    # files like 'DISC 4/01.wav, 02.wav, 03.wav' across 3 unrelated MB releases.
+    compilation_folders = set()
+    if _AID_KEY:
+        def _has_album_meta_override(folder: Path) -> bool:
+            fname = folder.name.lower()
+            full  = str(folder).lower()
+            return any(k.lower() in fname or k.lower() in full for k in ALBUM_META)
+
+        by_src_folder = defaultdict(list)
+        for fp in audio_files:
+            by_src_folder[fp.parent].append(fp)
+        for folder, files in by_src_folder.items():
+            if len(files) < 2:
+                continue
+            # Skip folders already covered by ALBUM_META — AcoustID won't run there.
+            if _has_album_meta_override(folder):
+                continue
+            # Only check folders where ≥1 file lacks embedded album tag
+            needs_check = any(not probe(f).get('album') for f in files)
+            if not needs_check:
+                continue
+            albums = set()
+            for f in files:
+                aid = acoustid_lookup(f)
+                if aid.get('album'):
+                    albums.add(aid['album'])
+            if len(albums) > 1:
+                compilation_folders.add(folder)
+        if compilation_folders:
+            print(f"\n📚  Compilation folders detected ({len(compilation_folders)}) "
+                  f"— keeping folder name as album:")
+            for folder in sorted(compilation_folders):
+                print(f"    {folder.relative_to(SOURCE)}")
+
     # ── Step 3: Process individual audio files ─────────────────────────────────
     print(f"\n📁  Processing {len(audio_files)} individual files …")
     missing_tags = []
@@ -1077,11 +1115,15 @@ def main(force: bool = False):
             for field in ('title', 'artist'):
                 if not meta.get(field) and aid.get(field):
                     meta[field] = aid[field]
-            # Album: replace path-inferred placeholder, or fill if missing
-            if aid.get('album') and (not meta.get('album') or 'album' in inferred_only):
+            # Album + date: replace path-inferred placeholder, or fill if missing.
+            # Skip both if folder was flagged as a compilation — different songs
+            # in the folder map to different MB releases, so per-track albums &
+            # years would scatter them. Keep folder name + no-year to group them.
+            is_compilation = fp.parent in compilation_folders
+            if (aid.get('album') and not is_compilation
+                    and (not meta.get('album') or 'album' in inferred_only)):
                 meta['album'] = aid['album']
-            # Date: fill if missing
-            if aid.get('date') and not meta.get('date'):
+            if aid.get('date') and not meta.get('date') and not is_compilation:
                 meta['date'] = aid['date']
             # album_artist: fill if missing only
             if aid.get('artist') and not meta.get('album_artist'):
