@@ -22,6 +22,12 @@ import os, json, shutil, re, subprocess, sys, tempfile
 from pathlib import Path
 from collections import defaultdict
 
+try:
+    from mutagen.wave import WAVE as _MutagenWAVE
+    _MUTAGEN_OK = True
+except ImportError:
+    _MUTAGEN_OK = False
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _HERE      = Path(__file__).parent
 SOURCE     = _HERE / "in"
@@ -146,6 +152,39 @@ def run(cmd, check=True) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
+def _probe_wav_mutagen(path: Path) -> dict:
+    """Read ID3 chunk from WAV via mutagen (fallback when ffprobe returns garbled tags)."""
+    try:
+        f = _MutagenWAVE(str(path))
+        if not f.tags:
+            return {}
+        def _t(key):
+            frame = f.tags.get(key)
+            return str(frame.text[0]) if frame and frame.text else ''
+        return {
+            'title':        _t('TIT2'),
+            'artist':       _t('TPE1') or _t('TPE2'),
+            'album_artist': _t('TPE2') or _t('TPE1'),
+            'album':        _t('TALB'),
+            'genre':        _t('TCON'),
+            'date':         _t('TDRC') or _t('TYER'),
+            'track':        _t('TRCK'),
+            'disc':         _t('TPOS'),
+        }
+    except Exception:
+        return {}
+
+
+def _has_garbled(tags: dict) -> bool:
+    """Return True if any text tag is all question-marks (ffprobe failed to decode)."""
+    text_fields = ('title', 'artist', 'album', 'genre')
+    for f in text_fields:
+        v = tags.get(f, '')
+        if v and all(c == '?' for c in v):
+            return True
+    return False
+
+
 def probe(path: Path) -> dict:
     r = run(['ffprobe','-v','quiet','-print_format','json',
              '-show_format','-show_streams', str(path)])
@@ -157,7 +196,7 @@ def probe(path: Path) -> dict:
     tags   = {k.lower(): v for k, v in fmt.get('tags', {}).items()}
     audio  = next((s for s in data.get('streams',[])
                    if s.get('codec_type') == 'audio'), {})
-    return {
+    result = {
         'title':        tags.get('title', ''),
         'artist':       tags.get('artist', tags.get('album_artist', '')),
         'album_artist': tags.get('album_artist', tags.get('artist', '')),
@@ -170,6 +209,14 @@ def probe(path: Path) -> dict:
         'duration':     float(fmt.get('duration', 0)),
         'bitrate':      int(fmt.get('bit_rate', 0) or 0),
     }
+    # WAV files may store tags in an ID3 chunk that ffprobe can't decode.
+    # Fall back to mutagen when ffprobe returns garbled (all-'?') values.
+    if _MUTAGEN_OK and path.suffix.lower() == '.wav' and _has_garbled(result):
+        mu = _probe_wav_mutagen(path)
+        for key in ('title', 'artist', 'album_artist', 'album', 'genre', 'date', 'track', 'disc'):
+            if mu.get(key):
+                result[key] = mu[key]
+    return result
 
 
 def year(s: str) -> str:
