@@ -755,6 +755,14 @@ def main(force: bool = False):
         print("  [--force] Overwriting existing files")
     print("=" * 65)
 
+    # Pre-warm MB cache for any ARTIST_GENRE entry not yet looked up.
+    # This runs silently; 🌐 lines only appear for new lookups.
+    uncached = [a for a in ARTIST_GENRE if a.lower() not in _MB_CACHE]
+    if uncached:
+        print(f"\n🌐  Pre-warming MusicBrainz cache for {len(uncached)} artist(s) …")
+        for artist in uncached:
+            mb_lookup_genre(artist)
+
     STAGING.mkdir(parents=True, exist_ok=True)
 
     # ── Step 1: Discover all audio files + CUE albums ─────────────────────────
@@ -1231,43 +1239,22 @@ def main(force: bool = False):
         if len(missing_tags) > 10:
             print(f"    … and {len(missing_tags)-10} more")
 
+    # ── ARTIST_GENRE audit (uses cache only, no new network calls) ────────────
+    removable = [
+        (a, g) for a, g in ARTIST_GENRE.items()
+        if _MB_CACHE.get(a.lower()) == g
+    ]
+    if removable:
+        print(f"\n💡  ARTIST_GENRE entries MusicBrainz can now cover ({len(removable)}) — safe to remove:")
+        for artist, genre in removable:
+            print(f"    '{artist}': '{genre}'")
+
     print(f"\n✅  Done! Output: {DEST}")
     print("=" * 65)
 
 
 def audit_artist_genre() -> None:
     """Query MusicBrainz for every entry in ARTIST_GENRE and report which are safe to remove."""
-    print("=" * 65)
-    print("  ARTIST_GENRE Audit  —  checking against MusicBrainz")
-    print("=" * 65)
-
-    removable, mismatch, no_result = [], [], []
-
-    for artist, local_genre in ARTIST_GENRE.items():
-        mb = mb_lookup_genre(artist)
-        if not mb:
-            no_result.append((artist, local_genre))
-        elif mb == local_genre:
-            removable.append((artist, local_genre))
-        else:
-            mismatch.append((artist, local_genre, mb))
-
-    print(f"\n✅  Safe to remove ({len(removable)})  — MusicBrainz agrees:")
-    for artist, g in removable:
-        print(f"    '{artist}': '{g}'")
-
-    print(f"\n⚠️   Keep ({len(mismatch)})  — MusicBrainz disagrees:")
-    for artist, local, mb in mismatch:
-        print(f"    '{artist}': local='{local}'  MB='{mb}'")
-
-    print(f"\n❓  Keep ({len(no_result)})  — MusicBrainz returned nothing:")
-    for artist, g in no_result:
-        print(f"    '{artist}': '{g}'")
-
-    print(f"\n💡  Re-run after removal to confirm MusicBrainz fills in correctly.")
-    print("=" * 65)
-
-
 if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser(
@@ -1279,17 +1266,10 @@ if __name__ == '__main__':
             '示例：\n'
             '  python3 music_organizer.py              # 全量处理\n'
             '  python3 music_organizer.py --no-force   # 跳过大小相同的已有文件\n'
-            '  python3 music_organizer.py --audit-genres  # 检查哪些 ARTIST_GENRE 条目可以删除\n'
         ),
     )
     ap.add_argument('--no-force', dest='force', action='store_false',
                     help='跳过大小相同的已有文件（默认：强制覆盖）')
-    ap.add_argument('--audit-genres', action='store_true',
-                    help='对比 ARTIST_GENRE 与 MusicBrainz，列出可以安全删除的条目')
     ap.set_defaults(force=True)
     args = ap.parse_args()
-
-    if args.audit_genres:
-        audit_artist_genre()
-    else:
-        main(force=args.force)
+    main(force=args.force)
