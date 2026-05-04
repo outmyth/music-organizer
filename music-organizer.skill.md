@@ -119,9 +119,14 @@ For each audio file, metadata is resolved through a layered pipeline:
 ⑤ ALBUM_META override applied (highest priority for album/artist/genre/year)
    parsed track/title overrides album-level override for those fields
         ↓
+⑤.5 canonicalize(meta['artist']) and canonicalize(meta['album_artist'])
+     Traditional → Simplified Chinese via OpenCC, so 陳慧嫻 and 陈慧娴
+     resolve to the same artist folder. Title/album NOT canonicalized —
+     authored character form preserved.
+        ↓
 ⑥ classify_genre() → final genre string
-   priority: ALBUM_META → ARTIST_GENRE → GENRE_MAP → JAZZ_TITLES →
-             Chinese chars → MusicBrainz API → 'Various'
+   priority: ALBUM_META → ARTIST_GENRE (canonicalized keys) → GENRE_MAP →
+             JAZZ_TITLES → Chinese chars → MusicBrainz API → 'Various'
 ```
 
 **Compilation guard (Step 2.5)** — runs once before Step 3, only if AcoustID
@@ -432,6 +437,10 @@ Common causes:
 | File under `Mandopop/WAV/WAV/` | Tags were missing; script used folder name as artist/album |
 | File under `Various/` genre | No genre tag, artist not in `ARTIST_GENRE`, no Chinese chars |
 | Old copy not deleted | Script ran before metadata fix; re-run will trigger orphan cleanup |
+| Same artist in two folders (e.g. `陳慧嫻/` + `陈慧娴/`) | OpenCC not installed — re-run to auto-install, or check `import opencc` works |
+| Songs from a compilation scattered across multiple albums | AcoustID picked different MB releases; verify the source folder has ≥2 files lacking embedded album tag (compilation guard's prerequisites) |
+| Multi-disc set missing CDs (e.g. only CD1 in output) | Source folder only contains that disc — `find in/ -name "*.cue"` to confirm what's actually present. Compare CUE filenames (CD1/CD2/Disc1) against expected count |
+| AcoustID returned wrong album for a single file | Incorrect MB match. Add an `ALBUM_META` override keyed by source folder name to force the correct values, or delete that entry from `.acoustid_cache.json` and verify the AcoustID score on next run |
 
 ---
 
