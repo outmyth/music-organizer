@@ -36,23 +36,33 @@ def _ensure_deps() -> None:
                        check=True)
         print("    ✅  mutagen installed")
 
-    # --- System: ffmpeg / ffprobe ---
-    missing = [t for t in ('ffmpeg', 'ffprobe')
-               if subprocess.run(['which', t], capture_output=True).returncode != 0]
-    if missing:
-        # Try Homebrew (macOS / Linux)
-        if subprocess.run(['which', 'brew'], capture_output=True).returncode == 0:
-            print(f"📦  Installing ffmpeg via Homebrew …")
-            subprocess.run(['brew', 'install', 'ffmpeg'], check=True)
-            print("    ✅  ffmpeg installed")
-        # Try apt (Debian/Ubuntu)
-        elif subprocess.run(['which', 'apt-get'], capture_output=True).returncode == 0:
-            print(f"📦  Installing ffmpeg via apt …")
-            subprocess.run(['sudo', 'apt-get', 'install', '-y', 'ffmpeg'], check=True)
-            print("    ✅  ffmpeg installed")
+    # --- System tools ---
+    # ffmpeg/ffprobe are required; fpcalc is optional (enables AcoustID lookup).
+    def _have(tool: str) -> bool:
+        return subprocess.run(['which', tool], capture_output=True).returncode == 0
+
+    def _install(brew_pkg: str, apt_pkg: str, label: str, required: bool = True) -> None:
+        if _have('brew'):
+            print(f"📦  Installing {label} via Homebrew …")
+            subprocess.run(['brew', 'install', brew_pkg], check=required)
+            print(f"    ✅  {label} installed")
+        elif _have('apt-get'):
+            print(f"📦  Installing {label} via apt …")
+            subprocess.run(['sudo', 'apt-get', 'install', '-y', apt_pkg], check=required)
+            print(f"    ✅  {label} installed")
         else:
-            print("⚠️   ffmpeg not found. Please install it manually: https://ffmpeg.org/download.html")
-            sys.exit(1)
+            msg = f"⚠️   {label} not found. Install manually."
+            if required:
+                print(msg)
+                sys.exit(1)
+            else:
+                print(f"{msg} (optional — AcoustID lookup will be disabled)")
+
+    if not (_have('ffmpeg') and _have('ffprobe')):
+        _install('ffmpeg', 'ffmpeg', 'ffmpeg', required=True)
+
+    if not _have('fpcalc'):
+        _install('chromaprint', 'libchromaprint-tools', 'fpcalc (chromaprint)', required=False)
 
 _ensure_deps()
 
@@ -234,6 +244,136 @@ def mb_lookup_genre(artist: str) -> str:
 
 
 _mb_load_cache()
+
+
+# ── AcoustID acoustic fingerprint lookup ──────────────────────────────────────
+# Identifies tracks by audio content alone — no embedded tags or filenames needed.
+# Requires fpcalc (chromaprint) + an API key from https://acoustid.org/new-application
+_AID_CACHE_PATH  = _HERE / '.acoustid_cache.json'
+_AID_KEY_PATH    = _HERE / '.acoustid_key'
+_AID_CACHE: dict = {}
+_AID_KEY: str    = (os.environ.get('ACOUSTID_API_KEY', '')
+                    or (_AID_KEY_PATH.read_text().strip() if _AID_KEY_PATH.exists() else ''))
+_AID_LAST_REQ    = 0.0
+_AID_WARNED      = False
+
+
+def _aid_load_cache() -> None:
+    global _AID_CACHE
+    if _AID_CACHE_PATH.exists():
+        try:
+            _AID_CACHE = json.loads(_AID_CACHE_PATH.read_text(encoding='utf-8'))
+        except Exception:
+            _AID_CACHE = {}
+
+
+def _aid_save_cache() -> None:
+    try:
+        _AID_CACHE_PATH.write_text(
+            json.dumps(_AID_CACHE, ensure_ascii=False, indent=2), encoding='utf-8')
+    except Exception:
+        pass
+
+
+def _fpcalc(fp: Path) -> tuple:
+    """Run fpcalc to get (duration_seconds, fingerprint). Returns (0, '') on failure."""
+    try:
+        r = subprocess.run(['fpcalc', '-json', str(fp)],
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode != 0:
+            return (0, '')
+        d = json.loads(r.stdout)
+        return (int(d.get('duration', 0)), d.get('fingerprint', ''))
+    except Exception:
+        return (0, '')
+
+
+def acoustid_lookup(fp: Path) -> dict:
+    """Identify a file via AcoustID + MusicBrainz. Returns metadata dict or {}.
+
+    Cached by file path + size so duplicate paths don't refetch.
+    Silently no-op if API key isn't configured or fpcalc not installed.
+    """
+    global _AID_LAST_REQ, _AID_WARNED
+
+    if not _AID_KEY:
+        if not _AID_WARNED:
+            print("   ℹ️   AcoustID skipped (no API key) — set ACOUSTID_API_KEY env var or .acoustid_key file")
+            print("       Get a free key at https://acoustid.org/new-application")
+            _AID_WARNED = True
+        return {}
+
+    try:
+        size = fp.stat().st_size
+    except Exception:
+        return {}
+    cache_key = f"{fp}::{size}"
+    if cache_key in _AID_CACHE:
+        return _AID_CACHE[cache_key]
+
+    duration, fingerprint = _fpcalc(fp)
+    if not fingerprint:
+        _AID_CACHE[cache_key] = {}
+        _aid_save_cache()
+        return {}
+
+    # Rate limit: AcoustID allows 3 req/sec; we use 1 req/sec to be polite.
+    elapsed = time.time() - _AID_LAST_REQ
+    if elapsed < 0.4:
+        time.sleep(0.4 - elapsed)
+
+    url  = 'https://api.acoustid.org/v2/lookup'
+    body = urllib.parse.urlencode({
+        'client':      _AID_KEY,
+        'duration':    duration,
+        'fingerprint': fingerprint,
+        'meta':        'recordings+releasegroups+releases+compress',
+    }).encode('utf-8')
+    req = urllib.request.Request(url, data=body, headers={
+        'User-Agent':   'MusicOrganizer/2.0 (outmyth@gmail.com)',
+        'Content-Type': 'application/x-www-form-urlencoded',
+    })
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            _AID_LAST_REQ = time.time()
+            data = json.loads(resp.read().decode('utf-8'))
+    except Exception:
+        _AID_LAST_REQ = time.time()
+        _AID_CACHE[cache_key] = {}
+        _aid_save_cache()
+        return {}
+
+    result = {}
+    for hit in data.get('results', []):
+        if hit.get('score', 0) < 0.7:
+            continue
+        for rec in hit.get('recordings', []):
+            title    = rec.get('title', '')
+            artists  = rec.get('artists', [])
+            artist   = ' / '.join(a.get('name', '') for a in artists if a.get('name'))
+            releases = rec.get('releases', [])
+            album, year = '', ''
+            if releases:
+                rel   = releases[0]
+                album = rel.get('title', '')
+                year  = str(rel.get('date', {}).get('year', '')) if rel.get('date') else ''
+            if title and artist:
+                result = {'title': title, 'artist': artist,
+                          'album': album, 'date': year}
+                break
+        if result:
+            break
+
+    _AID_CACHE[cache_key] = result
+    _aid_save_cache()
+    if result:
+        print(f"   🎼  AcoustID: {fp.name} → {result['artist']} - {result['title']}")
+    return result
+
+
+_aid_load_cache()
+
 
 # ── Album-level overrides (keyed by substring of folder name) ─────────────────
 # When embedded tags are incomplete/wrong, these values take precedence.
@@ -910,6 +1050,16 @@ def main(force: bool = False):
             if not meta.get(field):
                 # Prefer parsed over inferred
                 meta[field] = parsed.get(field, inf.get(field, ''))
+
+        # AcoustID fingerprint lookup — only when title or artist are still missing
+        # AND no ALBUM_META override applies (which would supply them anyway).
+        if not override and (not meta.get('title') or not meta.get('artist')):
+            aid = acoustid_lookup(fp)
+            for field in ('title', 'artist', 'album', 'date'):
+                if not meta.get(field) and aid.get(field):
+                    meta[field] = aid[field]
+            if aid.get('artist') and not meta.get('album_artist'):
+                meta['album_artist'] = aid['artist']
 
         # Apply album overrides (highest priority for album/genre/year)
         for k in ('album','album_artist','artist','genre','year'):

@@ -27,3 +27,6 @@ venv/
 .idea/
 *.swp
 *.swo
+
+# AcoustID API key (private, must not be committed)
+.acoustid_key

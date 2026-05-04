@@ -98,14 +98,23 @@ For each audio file, metadata is resolved through a layered pipeline:
      (bav / violin_wav / mozart_flac / levine_wav)
         ↓
 ③ infer_from_path() — fallback from filename & parent folder name
+   - Skips generic parents (DISC N, CD N) → uses grandparent for artist
+   - For "{track}. {X} - {Y}" filenames, checks ancestors / ARTIST_GENRE /
+     MB cache to determine which token is artist vs title
         ↓
 ④ Merge: parsed > inferred (fills missing fields only)
+        ↓
+④.5 acoustid_lookup(fp) — fingerprint via fpcalc + AcoustID API
+     Only fires if title or artist still missing AND no ALBUM_META override.
+     Requires ACOUSTID_API_KEY env var (or .acoustid_key file).
+     Cached in .acoustid_cache.json by file path + size.
         ↓
 ⑤ ALBUM_META override applied (highest priority for album/artist/genre/year)
    parsed track/title overrides album-level override for those fields
         ↓
 ⑥ classify_genre() → final genre string
-   priority: ALBUM_META → ARTIST_GENRE → GENRE_MAP → JAZZ_TITLES → Chinese chars → 'Various'
+   priority: ALBUM_META → ARTIST_GENRE → GENRE_MAP → JAZZ_TITLES →
+             Chinese chars → MusicBrainz API → 'Various'
 ```
 
 **Destination path formula:**
@@ -301,10 +310,27 @@ ffmpeg -i input.wav -metadata title="Title" -metadata artist="Artist" \
 
 **Cache file:** `.mb_cache.json` in project root — commit to git to persist across machines. Artists found to return wrong genre can be overridden in `ARTIST_GENRE`.
 
-**Audit command:**
-```bash
-python3 music_organizer.py --audit-genres
-```
+**Audit (now automatic):** every run prints suggestions in the summary report — entries where MusicBrainz now agrees with the local override. Pre-warming queries new ARTIST_GENRE entries at startup.
+
+---
+
+### 4. AcoustID acoustic fingerprinting
+
+**Added:** `acoustid_lookup(fp)` identifies a file by its audio content alone — works on completely untagged files.
+
+**Pipeline:** runs `fpcalc` (chromaprint) on the file → POSTs fingerprint + duration to `api.acoustid.org/v2/lookup` → picks the highest-scoring recording (≥0.7) → fills in title/artist/album/date.
+
+**When triggered:** only after embedded tags + path inference fail to provide title and artist (and no ALBUM_META override applies). This minimizes API calls and avoids overriding good local data.
+
+**Setup:**
+1. Register a free application at https://acoustid.org/new-application — get API key
+2. Either: `export ACOUSTID_API_KEY=your_key`
+   Or: write the key into `.acoustid_key` in the project root (gitignored)
+3. `fpcalc` auto-installs via brew/apt on first run
+
+**Cache:** `.acoustid_cache.json`, keyed by `path::size` so identical paths skip refetch. Commit to git to persist across machines.
+
+**Without API key:** prints a one-time hint when an eligible file appears, then silently skips.
 
 ---
 
