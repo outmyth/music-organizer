@@ -323,12 +323,16 @@ def acoustid_lookup(fp: Path) -> dict:
         time.sleep(0.4 - elapsed)
 
     url  = 'https://api.acoustid.org/v2/lookup'
+    # NOTE: meta MUST stay as 'recordings+releases+…' (single param, '+' separator).
+    # AcoustID does NOT accept repeated meta= params, AND urlencode escapes '+' to
+    # %2B which breaks the separator. So we urlencode the other fields and append
+    # the meta string verbatim.
     body = urllib.parse.urlencode({
         'client':      _AID_KEY,
         'duration':    duration,
         'fingerprint': fingerprint,
-        'meta':        'recordings+releasegroups+releases+compress',
-    }).encode('utf-8')
+    }) + '&meta=recordings+releases+compress'  # NB: adding 'releasegroups' suppresses 'releases'
+    body = body.encode('utf-8')
     req = urllib.request.Request(url, data=body, headers={
         'User-Agent':   'MusicOrganizer/2.0 (outmyth@gmail.com)',
         'Content-Type': 'application/x-www-form-urlencoded',
