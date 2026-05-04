@@ -101,6 +101,8 @@ ARTIST_GENRE = {
     'nnenna freelon':'Jazz',
     '王菲':           'Cantopop',
     '陈百强':         'Cantopop',
+    '陈慧娴':         'Mandopop',
+    '陳慧嫻':         'Mandopop',
 }
 
 GENRE_MAP = {
@@ -524,7 +526,9 @@ def split_cue_album(cue_path: Path, album_meta_override: dict,
         # Apply album overrides
         final_artist = album_meta_override.get('artist', artist)
         final_album  = album_meta_override.get('album', alb_ttl)
-        final_genre  = album_meta_override.get('genre', 'Classical')
+        final_genre  = album_meta_override.get('genre', '')
+        if not final_genre:
+            final_genre = classify_genre({'artist': final_artist, 'album': final_album})
         final_year   = album_meta_override.get('year', '')
 
         dest_fn = f"{track_n:02d} - {sanitize(title, 100)}{ext}"
