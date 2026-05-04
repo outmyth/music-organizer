@@ -115,6 +115,8 @@ GENRE_MAP = {
     'hip hop':'Hip Hop','rap':'Hip Hop',
 }
 
+_GENERIC_FOLDER_RE = re.compile(r'^(?:DISC|CD|Disk|Disc)\s*(\d+)?$', re.I)
+
 JAZZ_TITLES = {
     'time after time','cheek to cheek','unforgettable','but beautiful',
     'blue prelude',"i've got you under my skin","after you've gone",
@@ -467,8 +469,16 @@ def parse_levine_wav(fp: Path) -> dict:
 
 def infer_from_path(fp: Path) -> dict:
     """Generic fallback: parse from folder name + filename stem."""
-    folder = fp.parent.name
-    stem   = fp.stem
+    folder       = fp.parent.name
+    stem         = fp.stem
+    inferred_disc = ''
+
+    # If immediate parent is a generic disc/cd folder, step up to grandparent.
+    gm = _GENERIC_FOLDER_RE.match(folder)
+    if gm and fp.parent.parent.name:
+        inferred_disc = gm.group(1) or ''
+        folder = fp.parent.parent.name
+
     fm = re.match(r'^(.+?)\s*-\s*(.+?)\s*\((\d{4})\)\s*$', folder)
     if fm:
         fa, falb, fy = fm.group(1).strip(), fm.group(2).strip(), fm.group(3)
@@ -476,10 +486,20 @@ def infer_from_path(fp: Path) -> dict:
         fm2 = re.match(r'^(.+?)\s*-\s*(.+)$', folder)
         fa, falb, fy = (fm2.group(1).strip(), fm2.group(2).strip(), '') if fm2 else (folder, folder, '')
 
+    # Collect all ancestor folder names (lowercase) for artist disambiguation
+    ancestors_lower = {p.name.lower() for p in fp.parents}
+
     track_n, artist, title = '', fa, stem
     m = re.match(r'^(\d+)\.\s+(.+?)\s*[-–]\s*(.+)$', stem)
     if m:
-        track_n, artist, title = m.group(1), m.group(2).strip(), m.group(3).strip()
+        track_n, g2, g3 = m.group(1), m.group(2).strip(), m.group(3).strip()
+        # If g3 matches an ancestor folder or known artist, filename is "{title} - {artist}"
+        g3_known = g3.lower() in ancestors_lower or g3.lower() in ARTIST_GENRE or g3.lower() in _MB_CACHE
+        g2_known = g2.lower() in ancestors_lower or g2.lower() in ARTIST_GENRE or g2.lower() in _MB_CACHE
+        if g3_known and not g2_known:
+            artist, title = g3, g2
+        else:
+            artist, title = g2, g3
     else:
         m2 = re.match(r'^(\d+)\s*[-–]\s*(.+)$', stem)
         if m2:
@@ -489,7 +509,7 @@ def infer_from_path(fp: Path) -> dict:
             if m3:
                 track_n, title = m3.group(1), m3.group(2).strip()
     return {'title': title, 'artist': artist, 'album_artist': fa,
-            'album': falb, 'date': fy, 'track': track_n, 'genre': '', 'disc': ''}
+            'album': falb, 'date': fy, 'track': track_n, 'genre': '', 'disc': inferred_disc}
 
 
 def classify_genre(meta: dict) -> str:
