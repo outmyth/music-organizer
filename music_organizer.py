@@ -110,6 +110,22 @@ def normalize_multi_artist(s: str) -> str:
         return ' '.join(s.split())   # collapse whitespace only
     return ', '.join(parts)
 
+
+# "Various Artists" markers — values that mean "this is a compilation, not a
+# real performer". When they appear in album_artist (and no ALBUM_META override
+# forced them there), prefer the real `artist` for routing.
+_VARIOUS_MARKERS = {
+    '群星',                # Mandarin: "various stars" = Various Artists
+    '合輯', '合辑',         # Compilation (trad / simp)
+    'various artists', 'various',
+    'va', 'v.a.',
+    'compilation',
+    'unknown artist',
+}
+
+def _is_various_marker(s: str) -> bool:
+    return bool(s) and s.strip().lower() in _VARIOUS_MARKERS
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _HERE      = Path(__file__).parent
 SOURCE     = _HERE / "in"
@@ -1216,6 +1232,15 @@ def main(force: bool = False):
             if meta.get(k):
                 meta[k] = normalize_multi_artist(canonicalize(meta[k]))
 
+        # Tribute / compilation albums often tag album_artist as a "Various"
+        # marker (群星, Various Artists, VA, …). When the marker came from the
+        # embedded tag (NOT from ALBUM_META override), routing by album_artist
+        # masks the real performer — fall back to `artist` for the folder.
+        if (_is_various_marker(meta.get('album_artist', ''))
+                and not override.get('album_artist')
+                and meta.get('artist')):
+            meta['album_artist'] = meta['artist']
+
         genre  = classify_genre(meta)
         yr     = year(meta.get('date',''))
         tn     = track_num(meta.get('track',''))
@@ -1298,7 +1323,11 @@ def main(force: bool = False):
         src = t['src']  # staged file
         genre  = t['genre']
         yr     = t['year']
-        artist = sanitize(t['album_artist'] or t['artist'])
+        # Same Various-marker fallback as the individual-file path
+        aa = t['album_artist']
+        if _is_various_marker(aa) and t.get('artist'):
+            aa = t['artist']
+        artist = sanitize(aa or t['artist'])
         album  = sanitize(t['album'])
         title  = sanitize(t['title'])
         disc   = t.get('disc', '')

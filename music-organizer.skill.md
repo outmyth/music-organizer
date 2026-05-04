@@ -460,7 +460,19 @@ ffmpeg -i input.wav -metadata title="Title" -metadata artist="Artist" \
 
 ---
 
-### 6c. Traditional ↔ Simplified Chinese artist split
+### 6c. Tribute / compilation tracks routed to "Various" instead of real performer
+
+**Symptom:** `陈奕迅` performing track 9 of "ReImagine Leslie Cheung" (a tribute compilation) ended up at `Mandopop/群星/(2012) ReImagine Leslie Cheung/` because the file's embedded `album_artist=群星` (Mandarin for "Various Artists") took priority over `artist=陈奕迅` in routing.
+
+**Root cause:** `music_organizer.py` always preferred `album_artist` over `artist` for the destination folder — fine for normal albums, wrong when `album_artist` is a Various-marker placeholder.
+
+**Fix:** `_is_various_marker(s)` recognizes `群星`, `合輯/合辑`, `Various Artists`, `VA`, `V.A.`, `Compilation`, `Unknown Artist` (case-insensitive). When `meta['album_artist']` matches AND no `ALBUM_META` override forced it, fall back to `meta['artist']` for routing. BAV-style explicit Various overrides via `ALBUM_META` are preserved (override.get('album_artist') guard).
+
+**Effect:** the file now lands at `Mandopop/陈奕迅/(2012) ReImagine Leslie Cheung/09 - 最冷一天.flac`. BAV tracks still under `Jazz/Various/`.
+
+---
+
+### 6d. Traditional ↔ Simplified Chinese artist split
 
 **Symptom:** the same artist landed in two folders — `Mandopop/陳慧嫻/` (from embedded tags) AND `Mandopop/陈慧娴/` (from CUE-split files using folder name). Same person, same library, two homes.
 
