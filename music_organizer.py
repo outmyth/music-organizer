@@ -18,7 +18,8 @@ Music Organizer v2 — Sony HAP-Z1ES / Walkman / Chord Poly
 """
 
 from __future__ import annotations
-import os, json, shutil, re, subprocess, sys, tempfile
+import os, json, shutil, re, subprocess, sys, tempfile, time
+import urllib.request, urllib.parse
 from pathlib import Path
 from collections import defaultdict
 
@@ -130,6 +131,115 @@ JAZZ_TITLES = {
     'the look of love','perhaps love','skylark','so nice',
     'you light up my life','overjoyed','too young to go steady',
 }
+
+# ── MusicBrainz genre lookup ──────────────────────────────────────────────────
+_MB_CACHE_PATH = _HERE / '.mb_cache.json'
+_MB_CACHE: dict = {}
+_MB_LAST_REQ   = 0.0
+
+# MusicBrainz tag → our genre label
+_MB_TAG_MAP = {
+    'cantopop':      'Cantopop',
+    'cantonese pop': 'Cantopop',
+    'cantonese':     'Cantopop',
+    'mandopop':      'Mandopop',
+    'mandarin pop':  'Mandopop',
+    'chinese pop':   'Mandopop',
+    'c-pop':         'Mandopop',
+    'chinese rock':  'Chinese Rock',
+    'jazz':          'Jazz',
+    'vocal jazz':    'Jazz',
+    'jazz vocal':    'Jazz',
+    'bossa nova':    'Jazz',
+    'classical':     'Classical',
+    'orchestra':     'Classical',
+    'chamber music': 'Classical',
+    'choral':        'Choral',
+    'rock':          'Rock',
+    'hard rock':     'Rock',
+    'metal':         'Metal',
+    'heavy metal':   'Metal',
+    'soundtrack':    'Soundtrack',
+    'film score':    'Soundtrack',
+    'pop':           'Pop',
+    'hip hop':       'Hip Hop',
+    'r&b':           'R&B',
+    'electronic':    'Electronic',
+    'folk':          'Folk',
+}
+
+
+def _mb_load_cache() -> None:
+    global _MB_CACHE
+    if _MB_CACHE_PATH.exists():
+        try:
+            _MB_CACHE = json.loads(_MB_CACHE_PATH.read_text(encoding='utf-8'))
+        except Exception:
+            _MB_CACHE = {}
+
+
+def _mb_save_cache() -> None:
+    try:
+        _MB_CACHE_PATH.write_text(
+            json.dumps(_MB_CACHE, ensure_ascii=False, indent=2), encoding='utf-8')
+    except Exception:
+        pass
+
+
+def _mb_get(url: str) -> dict:
+    global _MB_LAST_REQ
+    elapsed = time.time() - _MB_LAST_REQ
+    if elapsed < 1.1:
+        time.sleep(1.1 - elapsed)
+    req = urllib.request.Request(url, headers={
+        'User-Agent': 'MusicOrganizer/2.0 (outmyth@gmail.com)',
+        'Accept':     'application/json',
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            _MB_LAST_REQ = time.time()
+            return json.loads(resp.read().decode('utf-8'))
+    except Exception:
+        _MB_LAST_REQ = time.time()
+        return {}
+
+
+def mb_lookup_genre(artist: str) -> str:
+    """Return genre for artist by querying MusicBrainz. Results cached locally."""
+    artist = (artist or '').strip()
+    if not artist:
+        return ''
+    key = artist.lower()
+    if key in _MB_CACHE:
+        return _MB_CACHE[key]
+
+    q    = urllib.parse.quote(f'artist:"{artist}"')
+    data = _mb_get(f'https://musicbrainz.org/ws/2/artist?query={q}&limit=1&fmt=json')
+    hits = data.get('artists', [])
+    if not hits:
+        _MB_CACHE[key] = ''
+        _mb_save_cache()
+        return ''
+
+    mbid   = hits[0].get('id', '')
+    detail = _mb_get(f'https://musicbrainz.org/ws/2/artist/{mbid}?inc=tags&fmt=json') if mbid else {}
+    tags   = sorted(detail.get('tags', []), key=lambda t: -t.get('count', 0))
+
+    genre = ''
+    for tag in tags:
+        mapped = _MB_TAG_MAP.get(tag.get('name', '').lower(), '')
+        if mapped:
+            genre = mapped
+            break
+
+    _MB_CACHE[key] = genre
+    _mb_save_cache()
+    if genre:
+        print(f"   🌐  MusicBrainz: {artist!r} → {genre}")
+    return genre
+
+
+_mb_load_cache()
 
 # ── Album-level overrides (keyed by substring of folder name) ─────────────────
 # When embedded tags are incomplete/wrong, these values take precedence.
@@ -411,6 +521,10 @@ def classify_genre(meta: dict) -> str:
 
     if any('\u4e00' <= c <= '\u9fff' for c in artist + album + title):
         return 'Mandopop'
+
+    mb = mb_lookup_genre(meta.get('artist', ''))
+    if mb:
+        return mb
 
     return 'Various'
 
