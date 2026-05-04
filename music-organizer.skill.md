@@ -184,8 +184,9 @@ Prints track counts by genre and format, total duration, and lists up to 10 file
 
 ```bash
 cd <project-dir>
-python3 music_organizer.py            # default: force overwrite
-python3 music_organizer.py --no-force # skip same-size existing files (incremental)
+python3 music_organizer.py               # default: force overwrite
+python3 music_organizer.py --no-force    # skip same-size existing files (incremental)
+python3 music_organizer.py --audit-genres  # compare ARTIST_GENRE vs MusicBrainz
 ```
 
 ---
@@ -238,7 +239,72 @@ Available `parse` values: `bav`, `violin_wav`, `mozart_flac`, `levine_wav`.
 3. `GENRE_MAP` — embedded genre tag normalization
 4. `JAZZ_TITLES` — title matches known jazz standards
 5. Chinese characters detected → `Mandopop` (fallback)
-6. `Various` (catch-all)
+6. **MusicBrainz API lookup** — queries `musicbrainz.org/ws/2/artist`, results cached in `.mb_cache.json`
+7. `Various` (catch-all)
+
+### ARTIST_GENRE maintenance — when to add a local override
+
+Run `python3 music_organizer.py --audit-genres` to compare every entry against MusicBrainz and get three groups:
+
+| Group | Action |
+|---|---|
+| ✅ MB agrees | Safe to delete — MB will cover it automatically |
+| ⚠️ MB disagrees | Keep — local override is intentionally different |
+| ❓ MB no result | Keep — MB can't find this artist |
+
+**Current overrides that must stay** (as of 2025-05-04 audit):
+- `alison krauss`, `eva cassidy` — MB says Folk, we classify as Jazz
+- `bach`, `brahms`, `schubert`, `dvorák`, `bach`, `carlo maria giulini`, `wiener philharmoniker`, `james levine` — MB returned no result
+- `mari nakamoto`, `唐朝`, `adele`, `junkie xl`, `群星` — MB returned no result
+- `陈慧娴` / `陳慧嫻` — MB no result (keep until coverage improves)
+
+---
+
+## Known issues fixed (2025-05-04)
+
+### 1. WAV files with ID3-only tags read as garbled `????`
+
+**Root cause:** `probe()` uses `ffprobe`, which reads WAV metadata from the INFO chunk (Latin-1). Files whose tags were written only to the ID3 chunk (e.g. by MusicBrainz Picard or mutagen) come back as `????` garbage.
+
+**Fix:** `probe()` now detects all-`?` values and falls back to `mutagen.wave.WAVE` (which reads the ID3 chunk natively). The fallback only fires for `.wav` files.
+
+**Symptom:** File appears as `????///26 - .wav` in organizer output.
+
+**Debug:**
+```bash
+ffprobe -v quiet -print_format json -show_format "file.wav" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['format'].get('tags',{}))"
+# If all values are '????', tags are in ID3 chunk only
+python3 -c "from mutagen.wave import WAVE; f=WAVE('file.wav'); print(f.tags.keys())"
+```
+
+**Permanent fix for the source file** (makes ffprobe readable without mutagen):
+```bash
+ffmpeg -i input.wav -metadata title="Title" -metadata artist="Artist" \
+  -metadata genre="Cantopop" -c:a copy output.wav
+```
+
+---
+
+### 2. CUE+WAV albums defaulted to Classical genre
+
+**Root cause:** `split_cue_album()` had `album_meta_override.get('genre', 'Classical')` — any CUE album not in `ALBUM_META` silently became Classical.
+
+**Fix:** Default changed to `''`; an empty genre then falls through to `classify_genre()` so Chinese-artist names resolve correctly to Mandopop/Cantopop.
+
+**Symptom:** `陈慧娴/几时再见演唱会` appeared under `out/MUSIC/Classical/` instead of `Mandopop/`.
+
+---
+
+### 3. MusicBrainz automatic genre lookup
+
+**Added:** `mb_lookup_genre(artist)` queries `musicbrainz.org/ws/2/artist` (1 req/sec rate limit, results cached in `.mb_cache.json`). Fires as penultimate fallback in `classify_genre()`.
+
+**Cache file:** `.mb_cache.json` in project root — commit to git to persist across machines. Artists found to return wrong genre can be overridden in `ARTIST_GENRE`.
+
+**Audit command:**
+```bash
+python3 music_organizer.py --audit-genres
+```
 
 ---
 

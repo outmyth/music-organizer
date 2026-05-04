@@ -77,6 +77,7 @@ IMG_EXT   = {'.jpg','.jpeg','.png','.JPG','.JPEG','.PNG'}
 
 # ── Genre rules ────────────────────────────────────────────────────────────────
 ARTIST_GENRE = {
+    # MusicBrainz cannot find these → must keep as local overrides
     'mari nakamoto': 'Jazz',
     '唐朝':          'Chinese Rock',
     'adele':         'Pop',
@@ -85,23 +86,14 @@ ARTIST_GENRE = {
     'wiener philharmoniker': 'Classical',
     'james levine':  'Classical',
     'schubert':      'Classical',
-    'mozart':        'Classical',
-    'beethoven':     'Classical',
     'brahms':        'Classical',
-    'mendelssohn':   'Classical',
-    'dvorak':        'Classical',
-    'dvorák':        'Classical',
+    'dvorák':        'Classical',    # MB only finds 'dvorak' (no accent)
     'bach':          'Classical',
     '群星':           'Choral',
+    # MusicBrainz returns 'Folk' for these — local Jazz override is intentional
     'alison krauss': 'Jazz',
     'eva cassidy':   'Jazz',
-    'jane monheit':  'Jazz',
-    'karrin allyson':'Jazz',
-    'stacey kent':   'Jazz',
-    'carol kidd':    'Jazz',
-    'nnenna freelon':'Jazz',
-    '王菲':           'Cantopop',
-    '陈百强':         'Cantopop',
+    # CUE album default-genre bug fix (2025-05-04): keep until MB covers these reliably
     '陈慧娴':         'Mandopop',
     '陳慧嫻':         'Mandopop',
 }
