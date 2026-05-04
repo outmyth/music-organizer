@@ -22,6 +22,39 @@ import os, json, shutil, re, subprocess, sys, tempfile
 from pathlib import Path
 from collections import defaultdict
 
+
+# ── Dependency bootstrap ───────────────────────────────────────────────────────
+def _ensure_deps() -> None:
+    """Auto-install missing Python packages and system tools (ffmpeg/ffprobe)."""
+    # --- Python: mutagen ---
+    try:
+        import mutagen  # noqa: F401
+    except ImportError:
+        print("📦  Installing mutagen …")
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '--quiet', 'mutagen'],
+                       check=True)
+        print("    ✅  mutagen installed")
+
+    # --- System: ffmpeg / ffprobe ---
+    missing = [t for t in ('ffmpeg', 'ffprobe')
+               if subprocess.run(['which', t], capture_output=True).returncode != 0]
+    if missing:
+        # Try Homebrew (macOS / Linux)
+        if subprocess.run(['which', 'brew'], capture_output=True).returncode == 0:
+            print(f"📦  Installing ffmpeg via Homebrew …")
+            subprocess.run(['brew', 'install', 'ffmpeg'], check=True)
+            print("    ✅  ffmpeg installed")
+        # Try apt (Debian/Ubuntu)
+        elif subprocess.run(['which', 'apt-get'], capture_output=True).returncode == 0:
+            print(f"📦  Installing ffmpeg via apt …")
+            subprocess.run(['sudo', 'apt-get', 'install', '-y', 'ffmpeg'], check=True)
+            print("    ✅  ffmpeg installed")
+        else:
+            print("⚠️   ffmpeg not found. Please install it manually: https://ffmpeg.org/download.html")
+            sys.exit(1)
+
+_ensure_deps()
+
 try:
     from mutagen.wave import WAVE as _MutagenWAVE
     _MUTAGEN_OK = True
