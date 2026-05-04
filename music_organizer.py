@@ -92,6 +92,24 @@ except ImportError:
     def canonicalize(s: str) -> str:
         return s
 
+# Multi-artist separator normalizer. Recognizes '/', '&', ',', ';',
+# 'feat.', 'ft.', 'featuring' as separators between collaborators.
+# Output uses ', ' as the canonical separator. Single-artist names returned
+# unchanged (only whitespace collapsed).
+_ARTIST_SEP_RE = re.compile(
+    r'\s*[/&,;]\s*'                                  # symbol separators
+    r'|\s+(?:feat\.?|ft\.?|featuring|with|vs\.?)\s+', # word separators
+    re.I,
+)
+
+def normalize_multi_artist(s: str) -> str:
+    if not s:
+        return s
+    parts = [p.strip() for p in _ARTIST_SEP_RE.split(s) if p.strip()]
+    if len(parts) <= 1:
+        return ' '.join(s.split())   # collapse whitespace only
+    return ', '.join(parts)
+
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _HERE      = Path(__file__).parent
 SOURCE     = _HERE / "in"
@@ -842,7 +860,7 @@ def split_cue_album(cue_path: Path, album_meta_override: dict,
         ext      = Path(audio_src).suffix
 
         # Apply album overrides
-        final_artist = canonicalize(album_meta_override.get('artist', artist))
+        final_artist = normalize_multi_artist(canonicalize(album_meta_override.get('artist', artist)))
         final_album  = album_meta_override.get('album', alb_ttl)
         final_genre  = album_meta_override.get('genre', '')
         if not final_genre:
@@ -1192,9 +1210,11 @@ def main(force: bool = False):
         # Canonicalize Chinese artist names (trad → simp) so 陳慧嫻 and 陈慧娴
         # don't end up in two separate folders. Only artist fields — leave
         # title/album as authored.
+        # Then normalize multi-artist separators ('/', '&', 'feat.' → ', ')
+        # so different versions of the same duet stay grouped.
         for k in ('artist', 'album_artist'):
             if meta.get(k):
-                meta[k] = canonicalize(meta[k])
+                meta[k] = normalize_multi_artist(canonicalize(meta[k]))
 
         genre  = classify_genre(meta)
         yr     = year(meta.get('date',''))

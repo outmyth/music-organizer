@@ -119,10 +119,11 @@ For each audio file, metadata is resolved through a layered pipeline:
 ⑤ ALBUM_META override applied (highest priority for album/artist/genre/year)
    parsed track/title overrides album-level override for those fields
         ↓
-⑤.5 canonicalize(meta['artist']) and canonicalize(meta['album_artist'])
-     Traditional → Simplified Chinese via OpenCC, so 陳慧嫻 and 陈慧娴
-     resolve to the same artist folder. Title/album NOT canonicalized —
-     authored character form preserved.
+⑤.5 normalize_multi_artist(canonicalize(meta['artist'])) — and same for album_artist
+     • canonicalize: trad → simp Chinese (陳慧嫻 → 陈慧娴) via OpenCC
+     • normalize_multi_artist: '/', '&', ',', 'feat.' → ', ' so '卢冠廷 / 莫文蔚'
+       and '卢冠廷&莫文蔚' both become '卢冠廷, 莫文蔚'
+     Title/album NOT touched — authored form preserved.
         ↓
 ⑥ classify_genre() → final genre string
    priority: ALBUM_META → ARTIST_GENRE (canonicalized keys) → GENRE_MAP →
@@ -434,7 +435,32 @@ ffmpeg -i input.wav -metadata title="Title" -metadata artist="Artist" \
 
 ---
 
-### 6. Traditional ↔ Simplified Chinese artist split
+### 6a. URL/watermark junk in artist tags
+
+**Symptom:** files from sites like `WWW.HIFI369.COM` had `album_artist=WWW.HIFI369.COM` (download-site URL) → file routed to `Mandopop/WWW.HIFI369.COM/` instead of the real artist's folder. AcoustID didn't help because the field had a value (just garbage), not "missing".
+
+**Fix:** `_clean_junk(s)` in `probe()` clears values matching `_JUNK_TAG_RE` — patterns: `http(s)://`, `www.`, top-level domains (`.com .net .org .cn .io .tv`), Chinese download-site terms (`公众号`, `下载站`). Applied to `artist`, `album_artist`, `album` fields before any other processing.
+
+**Effect:** real `artist=卢冠廷 / 莫文蔚` (which had been masked by the junk `album_artist`) now drives the destination.
+
+---
+
+### 6b. Multi-artist separator inconsistency
+
+**Symptom:** the same duet appeared under three folders because the separator differed between source files:
+- `卢冠廷  /  莫文蔚` (WAV, double-space slash)
+- `卢冠廷&莫文蔚` (FLAC, ampersand no spaces)
+- `卢冠廷 ,  莫文蔚` (some other rip, comma)
+
+**Fix:** `normalize_multi_artist(s)` in `music_organizer.py` runs after canonicalize. Splits on `/`, `&`, `,`, `;`, `feat.`, `ft.`, `featuring`, `with`, `vs.` and rejoins with `, ` (canonical separator). Single-artist names get only whitespace collapse.
+
+**Effect:** all three duet versions now land in `Mandopop/卢冠廷, 莫文蔚/`. Solo `卢冠廷` (no separator) stays as `卢冠廷/`.
+
+**Note:** order of names is preserved — `Lou Kuan-Ting, 莫文蔚` ≠ `莫文蔚, Lou Kuan-Ting`. This is intentional (lead artist usually comes first in tags). If two files credit the duo in opposite order, they'll still split.
+
+---
+
+### 6c. Traditional ↔ Simplified Chinese artist split
 
 **Symptom:** the same artist landed in two folders — `Mandopop/陳慧嫻/` (from embedded tags) AND `Mandopop/陈慧娴/` (from CUE-split files using folder name). Same person, same library, two homes.
 
