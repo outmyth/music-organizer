@@ -161,6 +161,8 @@ ARTIST_GENRE = {
     # 信乐团 (Shin) — Taiwan rock band; MB returns nothing for the name.
     '信乐团':         'Rock',
     '信樂團':         'Rock',   # traditional script form
+    # Pathfinder — Polish symphonic power metal; MB returns empty for this name.
+    'pathfinder':    'Metal',
 }
 # Canonicalize all keys (trad → simp) so matching is script-agnostic.
 ARTIST_GENRE = {canonicalize(k): v for k, v in ARTIST_GENRE.items()}
@@ -173,9 +175,13 @@ GENRE_MAP = {
     'pop':'Pop','adult contemporary':'Pop',
     '流行':'Pop','流行歌曲':'Pop','流行音乐':'Pop',         # zh: pop
     'soul':'Pop','r&b':'R&B','funk':'R&B',
-    'rock':'Rock','hard rock':'Rock','metal':'Rock','heavy metal':'Rock',
+    'rock':'Rock','hard rock':'Rock','alternative rock':'Rock','indie rock':'Rock',
     '摇滚':'Rock','搖滾':'Rock',                            # zh: rock (simp/trad)
-    '金属':'Rock','金屬':'Rock','重金属':'Rock','重金屬':'Rock',  # zh: metal
+    'metal':'Metal','heavy metal':'Metal','power metal':'Metal',
+    'symphonic metal':'Metal','death metal':'Metal','black metal':'Metal',
+    'thrash metal':'Metal','speed metal':'Metal','progressive metal':'Metal',
+    'gothic metal':'Metal','doom metal':'Metal',
+    '金属':'Metal','金屬':'Metal','重金属':'Metal','重金屬':'Metal',  # zh: metal
     'chinese rock':'Chinese Rock',
     'cantopop':'Cantopop','cantonese':'Cantopop','粤语':'Cantopop','粵語':'Cantopop',
     'mandopop':'Mandopop','mandarin':'Mandopop','国语':'Mandopop','國語':'Mandopop',
