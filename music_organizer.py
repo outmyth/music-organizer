@@ -169,14 +169,21 @@ GENRE_MAP = {
     'classical':'Classical','classic':'Classical','chamber':'Classical',
     'choral':'Choral','choir':'Choral','sacred':'Choral',
     'pop':'Pop','adult contemporary':'Pop',
+    '流行':'Pop','流行歌曲':'Pop','流行音乐':'Pop',         # zh: pop
     'soul':'Pop','r&b':'R&B','funk':'R&B',
     'rock':'Rock','hard rock':'Rock','metal':'Rock','heavy metal':'Rock',
+    '摇滚':'Rock','搖滾':'Rock',                            # zh: rock (simp/trad)
+    '金属':'Rock','金屬':'Rock','重金属':'Rock','重金屬':'Rock',  # zh: metal
     'chinese rock':'Chinese Rock',
-    'cantopop':'Cantopop','cantonese':'Cantopop',
-    'mandopop':'Mandopop','mandarin':'Mandopop',
+    'cantopop':'Cantopop','cantonese':'Cantopop','粤语':'Cantopop','粵語':'Cantopop',
+    'mandopop':'Mandopop','mandarin':'Mandopop','国语':'Mandopop','國語':'Mandopop',
+    'j-pop':'J-Pop','jpop':'J-Pop','japanese pop':'J-Pop',
+    'k-pop':'K-Pop','kpop':'K-Pop','korean pop':'K-Pop',
     'electronic':'Electronic','edm':'Electronic',
     'soundtrack':'Soundtrack','soundtracks':'Soundtrack','film score':'Soundtrack',
+    '原声':'Soundtrack','原声带':'Soundtrack','原聲帶':'Soundtrack',  # zh: soundtrack
     'folk':'Folk','acoustic':'Folk','country':'Folk',
+    '民谣':'Folk','民謠':'Folk','民歌':'Folk',               # zh: folk
     'hip hop':'Hip Hop','rap':'Hip Hop',
 }
 
@@ -840,25 +847,34 @@ def classify_genre(meta: dict) -> str:
     title  = (meta.get('title',  '') or '').lower()
     genre  = (meta.get('genre',  '') or '').strip()
 
+    # 1. Local high-confidence rules
     for key, g in ARTIST_GENRE.items():
         if key.lower() in artist or key.lower() in album:
             return g
 
+    # 2. JAZZ_TITLES \u2014 specific song titles that signal Jazz
+    if title.lower() in JAZZ_TITLES:
+        return 'Jazz'
+
+    # 3. MusicBrainz lookup BEFORE embedded-genre / Chinese-fallback.
+    #    MB knows that \u5f20\u56fd\u8363/\u674e\u514b\u52e4 are Cantopop (not Mandopop) and that
+    #    Megadeth tagged 'Pop' is actually Metal. Without this ordering we'd
+    #    keep wrong embedded values and miss correct online ones.
+    mb = mb_lookup_genre(meta.get('artist', ''))
+    if mb:
+        return mb
+
+    # 4. Embedded `genre` tag, normalized via GENRE_MAP
     if genre and genre.lower() not in ('other', 'unknown', ''):
         for key, g in GENRE_MAP.items():
             if key in genre.lower():
                 return g
         return genre.title()
 
-    if title.lower() in JAZZ_TITLES:
-        return 'Jazz'
-
+    # 5. Chinese characters present but MB couldn't classify the artist \u2014
+    #    we can't tell Cantopop / Mandopop / J-Pop apart, so use generic Pop.
     if any('\u4e00' <= c <= '\u9fff' for c in artist + album + title):
-        return 'Mandopop'
-
-    mb = mb_lookup_genre(meta.get('artist', ''))
-    if mb:
-        return mb
+        return 'Pop'
 
     return 'Various'
 
