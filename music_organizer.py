@@ -1252,6 +1252,24 @@ def main(force: bool = False):
             for folder in sorted(compilation_folders):
                 print(f"    {folder.relative_to(SOURCE)}")
 
+    # ── Step 2.6: Detect multi-disc albums ────────────────────────────────────
+    # Albums with files spanning multiple disc numbers (e.g. 黄耀明 - Jin Jing
+    # Dian has disc=1 and disc=2). When detected, force CD01/ subfolders even
+    # for disc=1 — without this, CD1 tracks land flat in the album root while
+    # CD2 ends up in CD02/, looking asymmetric.
+    multi_disc_albums = set()  # set of (album_artist, album) keys
+    _album_discs = defaultdict(set)
+    for fp in audio_files:
+        m = probe(fp)
+        aa = m.get('album_artist') or m.get('artist') or ''
+        al = m.get('album', '')
+        d  = (m.get('disc', '') or '').lstrip('0') or '1'
+        _album_discs[(aa, al)].add(d)
+    for key, discs in _album_discs.items():
+        # Multi-disc if any disc number ≥ 2
+        if any(d.isdigit() and int(d) >= 2 for d in discs):
+            multi_disc_albums.add(key)
+
     # ── Step 3: Process individual audio files ─────────────────────────────────
     print(f"\n📁  Processing {len(audio_files)} individual files …")
     missing_tags = []
@@ -1373,8 +1391,20 @@ def main(force: bool = False):
 
         # Folder: Music/[Category/]Genre/Artist/(Year) Album/
         alb_folder = f"({yr}) {album}" if yr else album
-        # Add disc subfolder if multi-disc
-        disc_folder = f"CD{disc}" if disc and disc not in ('01','1') else ''
+        # Disc subfolder rule:
+        #   • Single-disc album → flat in album root (no CD1/ noise)
+        #   • Multi-disc album → ALL discs go into CD01/, CD02/, … (symmetric)
+        is_multi_disc = (
+            (meta.get('album_artist') or meta.get('artist') or ''),
+            meta.get('album', '')
+        ) in multi_disc_albums
+        if is_multi_disc:
+            d = (disc.lstrip('0') or '1')
+            disc_folder = f"CD{int(d):02d}"
+        elif disc and disc not in ('01', '1'):
+            disc_folder = f"CD{disc}"
+        else:
+            disc_folder = ''
         cat = get_test_category(fp)
         if cat:
             dest_dir = MUSIC_DEST / 'Test' / sanitize(cat) / sanitize(genre) / artist / sanitize(alb_folder)
