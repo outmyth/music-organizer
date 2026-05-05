@@ -223,6 +223,7 @@ on first run via `pip` (Python packages) or `brew` / `apt` (system tools).
 | `ffmpeg` | Re-encode + write metadata when `ALBUM_META` / parsers fix tags during copy; CUE-image splitting | **Yes** — script exits if missing | `brew install ffmpeg` / `apt install ffmpeg` |
 | `ffprobe` (ships with ffmpeg) | Read embedded tags from every audio file (Step ① in pipeline) | **Yes** | bundled with ffmpeg |
 | `fpcalc` (chromaprint) | Generate Chromaprint acoustic fingerprint for AcoustID lookup | Optional — AcoustID step skipped if missing | `brew install chromaprint` / `apt install libchromaprint-tools` |
+| `rsync` | Sync `out/` to an SD card via the `--sync` flag (FAT32/exFAT-friendly options) | Required only when using `--sync` | Pre-installed on macOS / Linux |
 
 ### Python packages
 
@@ -259,12 +260,43 @@ No third-party HTTP / JSON / web-scraping libraries.
 
 ```bash
 cd <project-dir>
-python3 music_organizer.py               # default: force overwrite
+python3 music_organizer.py               # default: force overwrite (organize in/ → out/)
 python3 music_organizer.py --no-force    # skip same-size existing files (incremental)
 ```
 
 Audit (which `ARTIST_GENRE` entries are now redundant) is automatic — printed
 in the summary report at the end of every run.
+
+### Syncing to an SD card
+
+Sony Walkman / Chord Poly users want the contents of `out/` mirrored to the
+card root. The script wraps `rsync` with FAT32/exFAT-friendly flags:
+
+```bash
+# Always preview first
+python3 music_organizer.py --sync /Volumes/WALKMAN --dry-run
+
+# Default = MERGE (safe — never deletes anything on the card)
+python3 music_organizer.py --sync /Volumes/WALKMAN
+
+# MIRROR mode — also removes files on the card that aren't in out/
+python3 music_organizer.py --sync /Volumes/WALKMAN --mirror
+```
+
+Implementation details:
+- `rsync -rltD --modify-window=2` — copies times + symlinks but NOT Unix
+  perms (FAT can't store them). The 2-second mtime window forgives FAT's
+  coarse timestamps so unchanged files don't get rewritten every run.
+- Excluded from sync: `.DS_Store`, `._*` (Apple resource forks),
+  `.gitkeep`, and the three cache JSONs (`.mb_cache.json`,
+  `.acoustid_cache.json`, `.caa_cache.json`) — those are project bookkeeping,
+  not music.
+- If the destination doesn't exist, the script lists `/Volumes/*` so you can
+  see what's currently mounted.
+- macOS bundled rsync (2.6.9) shows non-ASCII filenames as `\#NNN` octal
+  escapes in `--dry-run` output. That's a display-only quirk; actual
+  transfers handle UTF-8 correctly. Install rsync 3.x via Homebrew if you
+  want clean Chinese names in dry-run previews.
 
 ---
 

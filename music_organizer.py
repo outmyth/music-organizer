@@ -1814,8 +1814,54 @@ def main(force: bool = False):
     print("=" * 65)
 
 
-def audit_artist_genre() -> None:
-    """Query MusicBrainz for every entry in ARTIST_GENRE and report which are safe to remove."""
+def sync_to_sdcard(dest_root: Path, mirror: bool = False, dry: bool = False) -> int:
+    """rsync out/ → SD card. Default is merge (no delete on destination).
+
+    Tuned for FAT32 / exFAT cards used by Sony Walkman / Chord Poly:
+      • -rltD (no -p): copy times + symlinks + special files, but NOT perms
+        — FAT has no Unix perms, copying them produces noise.
+      • --modify-window=2: tolerate FAT's 2-second mtime resolution.
+      • Excludes Apple metadata files (.DS_Store, ._*) that confuse some DAPs
+        and project bookkeeping caches that aren't music.
+    """
+    if not dest_root.exists():
+        print(f"❌  Destination not found: {dest_root}")
+        print(f"    Mount the card and try again. Available volumes:")
+        if Path('/Volumes').exists():
+            for v in sorted(Path('/Volumes').iterdir()):
+                print(f"      /Volumes/{v.name}")
+        return 1
+
+    src = str(DEST).rstrip('/') + '/'           # trailing slash → copy contents, not folder
+    dst = str(dest_root).rstrip('/') + '/'
+
+    args = ['rsync',
+            '-rltD',
+            '--modify-window=2',
+            '--exclude=.DS_Store',
+            '--exclude=._*',
+            '--exclude=.gitkeep',
+            '--exclude=.acoustid_cache.json',
+            '--exclude=.acoustid_key',
+            '--exclude=.mb_cache.json',
+            '--exclude=.caa_cache.json',
+            '--human-readable',
+            '--stats']
+    if dry:
+        args += ['--dry-run', '--itemize-changes']
+    if mirror:
+        args += ['--delete']
+
+    args += [src, dst]
+
+    mode = 'mirror (--delete)' if mirror else 'merge (no delete)'
+    if dry:
+        mode = f"DRY RUN, {mode}"
+    print(f"\n💾  Sync mode: {mode}")
+    print(f"    {src}\n    → {dst}\n")
+    return subprocess.run(args).returncode
+
+
 if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser(
@@ -1825,12 +1871,28 @@ if __name__ == '__main__':
             '默认行为（无参数）等同于 --force：\n'
             '  强制覆盖已有文件。\n\n'
             '示例：\n'
-            '  python3 music_organizer.py              # 全量处理\n'
-            '  python3 music_organizer.py --no-force   # 跳过大小相同的已有文件\n'
+            '  python3 music_organizer.py                         # 全量整理\n'
+            '  python3 music_organizer.py --no-force              # 跳过同尺寸已存在文件\n'
+            '  python3 music_organizer.py --sync /Volumes/WALKMAN --dry-run\n'
+            '  python3 music_organizer.py --sync /Volumes/WALKMAN          # 合并模式（不删）\n'
+            '  python3 music_organizer.py --sync /Volumes/WALKMAN --mirror # 镜像（删 SD 上多余文件）\n'
         ),
     )
     ap.add_argument('--no-force', dest='force', action='store_false',
                     help='跳过大小相同的已有文件（默认：强制覆盖）')
+    ap.add_argument('--sync', metavar='DEST',
+                    help='rsync out/ to an SD-card path (e.g. /Volumes/WALKMAN)')
+    ap.add_argument('--mirror', action='store_true',
+                    help='with --sync: also delete files on the card that aren\'t in out/')
+    ap.add_argument('--dry-run', action='store_true',
+                    help='with --sync: show what would change without copying anything')
     ap.set_defaults(force=True)
     args = ap.parse_args()
-    main(force=args.force)
+
+    if args.sync:
+        sys.exit(sync_to_sdcard(Path(args.sync),
+                                mirror=args.mirror, dry=args.dry_run))
+    else:
+        if args.mirror or args.dry_run:
+            ap.error('--mirror / --dry-run only apply with --sync')
+        main(force=args.force)
