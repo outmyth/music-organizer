@@ -28,5 +28,7 @@ venv/
 *.swp
 *.swo
 
-# AcoustID API key (private, must not be committed)
+# API keys (private, must not be committed)
 .acoustid_key
+.lastfm_key
+.discogs_key
