@@ -652,6 +652,270 @@ def itunes_lookup(artist: str, title: str) -> dict:
 _itunes_load_cache()
 
 
+# ── Last.fm track.getInfo — metadata fallback ─────────────────────────────────
+# Requires a free API key from https://www.last.fm/api/account/create
+# Excellent coverage of Chinese/Japanese pop that AcoustID and MB may miss.
+# Rate limit: 5 req/s; we use 1 req/s to be polite.
+_LASTFM_CACHE_PATH = _HERE / '.lastfm_cache.json'
+_LASTFM_KEY_PATH   = _HERE / '.lastfm_key'
+_LASTFM_CACHE: dict = {}
+_LASTFM_KEY: str   = (os.environ.get('LASTFM_API_KEY', '')
+                      or (_LASTFM_KEY_PATH.read_text().strip()
+                          if _LASTFM_KEY_PATH.exists() else ''))
+_LASTFM_LAST_REQ   = 0.0
+_LASTFM_WARNED     = False
+
+
+def _lastfm_load_cache() -> None:
+    global _LASTFM_CACHE
+    if _LASTFM_CACHE_PATH.exists():
+        try:
+            _LASTFM_CACHE = json.loads(_LASTFM_CACHE_PATH.read_text(encoding='utf-8'))
+        except Exception:
+            _LASTFM_CACHE = {}
+
+
+def _lastfm_save_cache() -> None:
+    try:
+        _LASTFM_CACHE_PATH.write_text(
+            json.dumps(_LASTFM_CACHE, ensure_ascii=False, indent=2), encoding='utf-8')
+    except Exception:
+        pass
+
+
+def lastfm_lookup(artist: str, title: str) -> dict:
+    """Query Last.fm track.getInfo for album/date/genre. Returns dict or {}.
+
+    Cached by 'artist::title' (lowercased). Skipped silently when no API key.
+    """
+    global _LASTFM_LAST_REQ, _LASTFM_WARNED
+    if not _LASTFM_KEY:
+        if not _LASTFM_WARNED:
+            print('   ℹ️   Last.fm skipped (no API key) — create .lastfm_key or set LASTFM_API_KEY')
+            _LASTFM_WARNED = True
+        return {}
+
+    artist = (artist or '').strip()
+    title  = (title  or '').strip()
+    if not artist or not title:
+        return {}
+
+    cache_key = f"{artist.lower()}::{title.lower()}"
+    if cache_key in _LASTFM_CACHE:
+        return _LASTFM_CACHE[cache_key]
+
+    elapsed = time.time() - _LASTFM_LAST_REQ
+    if elapsed < 1.0:
+        time.sleep(1.0 - elapsed)
+
+    params = urllib.parse.urlencode({
+        'method':      'track.getInfo',
+        'api_key':     _LASTFM_KEY,
+        'artist':      artist,
+        'track':       title,
+        'autocorrect': '1',
+        'format':      'json',
+    })
+    req = urllib.request.Request(
+        f'http://ws.audioscrobbler.com/2.0/?{params}',
+        headers={'User-Agent': 'MusicOrganizer/2.0 (outmyth@gmail.com)'},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            _LASTFM_LAST_REQ = time.time()
+            data = json.loads(resp.read().decode('utf-8'))
+    except Exception:
+        _LASTFM_LAST_REQ = time.time()
+        _LASTFM_CACHE[cache_key] = {}
+        _lastfm_save_cache()
+        return {}
+
+    track = data.get('track', {})
+    if not track or 'error' in data:
+        _LASTFM_CACHE[cache_key] = {}
+        _lastfm_save_cache()
+        return {}
+
+    album_obj  = track.get('album', {})
+    album_name = album_obj.get('title', '')
+
+    # releasedate is unreliable ("  17 Aug 1959, 00:00"); extract 4-digit year
+    raw_date = album_obj.get('releasedate', '') or track.get('wiki', {}).get('published', '')
+    yr_m     = re.search(r'\b(\d{4})\b', raw_date)
+    yr       = yr_m.group(1) if yr_m else ''
+    if yr and not (1900 <= int(yr) <= 2100):
+        yr = ''
+
+    # Genre from community tags (top tag, mapped through GENRE_MAP)
+    genre = ''
+    tags = track.get('toptags', {}).get('tag', [])
+    if isinstance(tags, dict):   # single tag comes as dict, not list
+        tags = [tags]
+    for tag in tags:
+        name   = tag.get('name', '').lower()
+        mapped = GENRE_MAP.get(name, '')
+        if mapped:
+            genre = mapped
+            break
+
+    result = {'album': album_name, 'date': yr, 'genre': genre}
+    _LASTFM_CACHE[cache_key] = result
+    _lastfm_save_cache()
+    if album_name:
+        print(f"   🎵  Last.fm: {artist!r} / {title!r}"
+              f" → album={album_name!r} date={yr!r}")
+    return result
+
+
+_lastfm_load_cache()
+
+
+# ── Discogs search — physical-release metadata fallback ───────────────────────
+# Requires a free personal access token from https://www.discogs.com/settings/developers
+# Best for vinyl/CD release info: accurate year, label, and genre for jazz/classical.
+# Rate limit: 60 req/min authenticated; we use 1 req/s.
+_DISCOGS_CACHE_PATH = _HERE / '.discogs_cache.json'
+_DISCOGS_KEY_PATH   = _HERE / '.discogs_key'
+_DISCOGS_CACHE: dict = {}
+_DISCOGS_KEY: str   = (os.environ.get('DISCOGS_TOKEN', '')
+                       or (_DISCOGS_KEY_PATH.read_text().strip()
+                           if _DISCOGS_KEY_PATH.exists() else ''))
+_DISCOGS_LAST_REQ   = 0.0
+_DISCOGS_WARNED     = False
+
+_DISCOGS_GENRE_MAP = {
+    'jazz':                    'Jazz',
+    'classical':               'Classical',
+    'rock':                    'Rock',
+    'pop':                     'Pop',
+    'electronic':              'Electronic',
+    'hip hop':                 'Hip Hop',
+    'folk, world, & country':  'Folk',
+    'folk':                    'Folk',
+    'stage & screen':          'Soundtrack',
+    'brass & military':        'Classical',
+    'children\'s':             'Pop',
+    'reggae':                  'Pop',
+    'latin':                   'Pop',
+    'funk / soul':             'Pop',
+    'blues':                   'Jazz',
+    'non-music':               '',
+}
+
+
+def _discogs_load_cache() -> None:
+    global _DISCOGS_CACHE
+    if _DISCOGS_CACHE_PATH.exists():
+        try:
+            _DISCOGS_CACHE = json.loads(_DISCOGS_CACHE_PATH.read_text(encoding='utf-8'))
+        except Exception:
+            _DISCOGS_CACHE = {}
+
+
+def _discogs_save_cache() -> None:
+    try:
+        _DISCOGS_CACHE_PATH.write_text(
+            json.dumps(_DISCOGS_CACHE, ensure_ascii=False, indent=2), encoding='utf-8')
+    except Exception:
+        pass
+
+
+def discogs_lookup(artist: str, title: str) -> dict:
+    """Query Discogs database search for release album/year/genre. Returns dict or {}.
+
+    Searches by artist+track. Prefers releases whose format includes 'Album'
+    and whose year is earliest. Skipped silently when no token configured.
+    Cached by 'artist::title' (lowercased).
+    """
+    global _DISCOGS_LAST_REQ, _DISCOGS_WARNED
+    if not _DISCOGS_KEY:
+        if not _DISCOGS_WARNED:
+            print('   ℹ️   Discogs skipped (no token) — create .discogs_key or set DISCOGS_TOKEN')
+            _DISCOGS_WARNED = True
+        return {}
+
+    artist = (artist or '').strip()
+    title  = (title  or '').strip()
+    if not artist or not title:
+        return {}
+
+    cache_key = f"{artist.lower()}::{title.lower()}"
+    if cache_key in _DISCOGS_CACHE:
+        return _DISCOGS_CACHE[cache_key]
+
+    elapsed = time.time() - _DISCOGS_LAST_REQ
+    if elapsed < 1.0:
+        time.sleep(1.0 - elapsed)
+
+    params = urllib.parse.urlencode({
+        'artist':   artist,
+        'track':    title,
+        'type':     'release',
+        'per_page': '10',
+        'page':     '1',
+    })
+    req = urllib.request.Request(
+        f'https://api.discogs.com/database/search?{params}',
+        headers={
+            'User-Agent':    'MusicOrganizer/2.0 (outmyth@gmail.com)',
+            'Authorization': f'Discogs token={_DISCOGS_KEY}',
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            _DISCOGS_LAST_REQ = time.time()
+            data = json.loads(resp.read().decode('utf-8'))
+    except Exception:
+        _DISCOGS_LAST_REQ = time.time()
+        _DISCOGS_CACHE[cache_key] = {}
+        _discogs_save_cache()
+        return {}
+
+    results = data.get('results', [])
+    if not results:
+        _DISCOGS_CACHE[cache_key] = {}
+        _discogs_save_cache()
+        return {}
+
+    # Prefer releases with album format; among those, pick earliest year
+    def _is_album(r):
+        fmts = [f.lower() for f in (r.get('format') or [])]
+        return 'album' in fmts or 'lp' in fmts
+
+    def _sort_key(r):
+        yr = r.get('year') or '9999'
+        return (0 if _is_album(r) else 1, str(yr))
+
+    best  = min(results, key=_sort_key)
+    yr    = str(best.get('year', '') or '')
+    if yr and not yr.isdigit():
+        yr = ''
+    if yr and not (1900 <= int(yr) <= 2100):
+        yr = ''
+
+    # Discogs title field is "Artist – Album" or just album name
+    raw_title  = best.get('title', '')
+    album_name = raw_title.split(' - ', 1)[-1].strip() if ' - ' in raw_title else raw_title
+
+    # Genre from Discogs genre list
+    genres_raw = [g.lower() for g in (best.get('genre') or [])]
+    genre = next(
+        (_DISCOGS_GENRE_MAP[g] for g in genres_raw if g in _DISCOGS_GENRE_MAP and _DISCOGS_GENRE_MAP[g]),
+        '',
+    )
+
+    result = {'album': album_name, 'date': yr, 'genre': genre}
+    _DISCOGS_CACHE[cache_key] = result
+    _discogs_save_cache()
+    if album_name:
+        print(f"   💿  Discogs: {artist!r} / {title!r}"
+              f" → album={album_name!r} date={yr!r}")
+    return result
+
+
+_discogs_load_cache()
+
+
 # ── Cover Art Archive (CAA) — automatic cover download ────────────────────────
 # When a destination album folder ends up without folder.jpg (no cover found
 # in the source), search MusicBrainz for the release and pull the front cover
@@ -1637,41 +1901,56 @@ def main(force: bool = False):
             if aid.get('artist') and not meta.get('album_artist'):
                 meta['album_artist'] = aid['artist']
 
-        # MusicBrainz Recording — secondary text-based fallback when AcoustID
-        # returned nothing and album or date is still missing.
-        mb_rec_enriched = False
-        if (not override and not aid_enriched
-                and meta.get('title') and meta.get('artist')
-                and 'artist' not in inferred_only
-                and (not meta.get('album') or 'album' in inferred_only
-                     or not meta.get('date'))):
-            mbr = mb_lookup_recording(meta['artist'], meta['title'])
-            if mbr:
-                mb_rec_enriched = True
-                if mbr.get('album') and (not meta.get('album') or 'album' in inferred_only):
-                    meta['album'] = mbr['album']
-                    inferred_only.discard('album')   # no longer just a path guess
-                if mbr.get('date') and not meta.get('date'):
-                    meta['date'] = mbr['date']
+        # ── Text-based metadata fallback chain ────────────────────────────────
+        # Each service fills whatever is still missing after the previous one.
+        # Guard: needs title+artist from reliable source (not folder-name inference).
+        # Priority: MB Recording → Last.fm → Discogs → iTunes
+        def _still_needs(m, inf):
+            return (not m.get('album') or 'album' in inf or not m.get('date'))
 
-        # iTunes Search API — tertiary fallback when both AcoustID and MB Recording
-        # returned nothing and album or date is still missing. Needs title+artist to query.
+        def _apply(m, inf, result, enriched_flag):
+            changed = False
+            if result.get('album') and (not m.get('album') or 'album' in inf):
+                m['album'] = result['album']
+                inf.discard('album')
+                changed = True
+            if result.get('date') and not m.get('date'):
+                m['date'] = result['date']
+                changed = True
+            if result.get('genre') and not m.get('genre'):
+                m['genre'] = result['genre']
+                changed = True
+            return changed
+
+        _text_ok = (
+            not override
+            and meta.get('title') and meta.get('artist')
+            and 'artist' not in inferred_only
+        )
+
+        mb_rec_enriched = False
+        if _text_ok and _still_needs(meta, inferred_only):
+            mbr = mb_lookup_recording(meta['artist'], meta['title'])
+            if _apply(meta, inferred_only, mbr, 'mb_rec'):
+                mb_rec_enriched = True
+
+        lastfm_enriched = False
+        if _text_ok and _still_needs(meta, inferred_only):
+            lf = lastfm_lookup(meta['artist'], meta['title'])
+            if _apply(meta, inferred_only, lf, 'lastfm'):
+                lastfm_enriched = True
+
+        discogs_enriched = False
+        if _text_ok and _still_needs(meta, inferred_only):
+            dg = discogs_lookup(meta['artist'], meta['title'])
+            if _apply(meta, inferred_only, dg, 'discogs'):
+                discogs_enriched = True
+
         itunes_enriched = False
-        if (not override and not aid_enriched and not mb_rec_enriched
-                and meta.get('title') and meta.get('artist')
-                and 'artist' not in inferred_only   # don't search with folder-name placeholder
-                and (not meta.get('album') or 'album' in inferred_only
-                     or not meta.get('date'))):
+        if _text_ok and _still_needs(meta, inferred_only):
             itunes = itunes_lookup(meta['artist'], meta['title'])
-            if itunes:
+            if _apply(meta, inferred_only, itunes, 'itunes'):
                 itunes_enriched = True
-                if itunes.get('album') and (not meta.get('album') or 'album' in inferred_only):
-                    meta['album'] = itunes['album']
-                if itunes.get('date') and not meta.get('date'):
-                    meta['date'] = itunes['date']
-                # iTunes genre: only use as last resort (weaker than MB or embedded tag)
-                if itunes.get('genre') and not meta.get('genre'):
-                    meta['genre'] = itunes['genre']
 
         # Apply album overrides (highest priority for album/genre/year)
         for k in ('album','album_artist','artist','genre','year'):
@@ -1744,7 +2023,10 @@ def main(force: bool = False):
         # Triggers when: ALBUM_META override, special filename parser,
         # AcoustID enriched any field, or path inference filled any field
         # (so corrected tags land in the output file, not just the folder path).
-        needs_tag_write = bool(override or special_parse or aid_enriched or mb_rec_enriched or itunes_enriched or inferred_only)
+        needs_tag_write = bool(override or special_parse or aid_enriched
+                               or mb_rec_enriched or lastfm_enriched
+                               or discogs_enriched or itunes_enriched
+                               or inferred_only)
         meta_to_write = {
             'title':        meta.get('title') or fp.stem,
             'artist':       meta.get('artist') or 'Unknown',
