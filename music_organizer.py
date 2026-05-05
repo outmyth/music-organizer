@@ -1818,6 +1818,19 @@ def main(force: bool = False):
         for artist, genre in removable:
             print(f"    '{artist}': '{genre}'")
 
+    # Conflicts: ARTIST_GENRE overrides a non-empty MB result with a different value.
+    # These may be intentional (e.g. 'beyond': Rock vs MB's Cantopop) or mistakes
+    # (e.g. '唐朝': Chinese Rock vs MB's correct Metal). Review manually.
+    conflicts = [
+        (a, g, _MB_CACHE[a.lower()])
+        for a, g in ARTIST_GENRE.items()
+        if _MB_CACHE.get(a.lower()) and _MB_CACHE.get(a.lower()) != g
+    ]
+    if conflicts:
+        print(f"\n⚠️   ARTIST_GENRE conflicts with MusicBrainz ({len(conflicts)}) — verify intentional:")
+        for artist, local, mb in conflicts:
+            print(f"    '{artist}': local={local!r}  MB={mb!r}")
+
     print(f"\n✅  Done! Output: {DEST}")
     print("=" * 65)
 
