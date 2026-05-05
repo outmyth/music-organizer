@@ -154,6 +154,12 @@ ARTIST_GENRE = {
     # MB has multiple "Anthony Wong" (actor 黄秋生 vs singer 黄耀明) and
     # picks the wrong one. We mean the Cantopop singer (Tat Ming Pair).
     'anthony wong':  'Cantopop',
+    # MB tags BEYOND as Cantopop (correct — they sing in Cantonese), but
+    # they're widely considered a rock band. User preference: Rock folder.
+    'beyond':        'Rock',
+    # 信乐团 (Shin) — Taiwan rock band; MB returns nothing for the name.
+    '信乐团':         'Rock',
+    '信樂團':         'Rock',   # traditional script form
 }
 # Canonicalize all keys (trad → simp) so matching is script-agnostic.
 ARTIST_GENRE = {canonicalize(k): v for k, v in ARTIST_GENRE.items()}
