@@ -163,6 +163,11 @@ ARTIST_GENRE = {
     '信樂團':         'Rock',   # traditional script form
     # Pathfinder — Polish symphonic power metal; MB returns empty for this name.
     'pathfinder':    'Metal',
+    # '唐朝' covers both the short form (CUE artist tag) and '唐朝乐队' (folder-
+    # inferred artist for tagless WAV files) via substring matching. MB knows
+    # '唐朝' → Metal but returns empty for '唐朝乐队', so keeping this here
+    # is necessary even though the audit says MB can cover the exact key.
+    '唐朝':          'Metal',
 }
 # Canonicalize all keys (trad → simp) so matching is script-agnostic.
 ARTIST_GENRE = {canonicalize(k): v for k, v in ARTIST_GENRE.items()}
@@ -1814,9 +1819,21 @@ def main(force: bool = False):
             print(f"    … and {len(missing_tags)-10} more")
 
     # ── ARTIST_GENRE audit (uses cache only, no new network calls) ────────────
+    # An entry is only safe to remove if MB covers the exact key AND there are
+    # no other cached artists that use it as a substring (e.g. '唐朝' also
+    # covers '唐朝乐队' via substring matching — removing it would lose that).
+    def _has_substring_dependents(key: str, genre: str) -> bool:
+        """Return True if removing this key would leave some cached artist unclassified."""
+        k = key.lower()
+        for cached_artist, cached_genre in _MB_CACHE.items():
+            if k in cached_artist and cached_artist != k and not cached_genre:
+                return True
+        return False
+
     removable = [
         (a, g) for a, g in ARTIST_GENRE.items()
         if _MB_CACHE.get(a.lower()) == g
+        and not _has_substring_dependents(a, g)
     ]
     if removable:
         print(f"\n💡  ARTIST_GENRE entries MusicBrainz can now cover ({len(removable)}) — safe to remove:")
