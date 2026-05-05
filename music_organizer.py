@@ -1420,7 +1420,7 @@ def main(force: bool = False):
                 # Compilation guard only prevented grouping files under folder-name;
                 # per-track identification is always better than folder-name fallback.
                 meta['album'] = aid['album']
-            if aid.get('date') and not meta.get('date') and not is_compilation:
+            if aid.get('date') and not meta.get('date'):
                 meta['date'] = aid['date']
             # album_artist: fill if missing only
             if aid.get('artist') and not meta.get('album_artist'):
