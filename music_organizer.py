@@ -914,6 +914,7 @@ def parse_cue(cue_path: Path) -> list[dict]:
     cur_track = {}
     album_title = ''
     album_artist = ''
+    album_date = ''
     audio_file = cue_path.parent / ''  # default: same dir
 
     for line in content.splitlines():
@@ -940,8 +941,8 @@ def parse_cue(cue_path: Path) -> list[dict]:
             continue
 
         m_date = re.match(r'^REM\s+DATE\s+(\d+)', line, re.IGNORECASE)
-        if m_date and not cur_track:
-            tracks.append({'__album_date': m_date.group(1)})
+        if m_date:
+            album_date = m_date.group(1)
             continue
 
         m_track = re.match(r'^TRACK\s+(\d+)\s+AUDIO', line, re.IGNORECASE)
@@ -949,7 +950,8 @@ def parse_cue(cue_path: Path) -> list[dict]:
             if cur_track and 'number' in cur_track:
                 tracks.append(cur_track)
             cur_track = {'number': int(m_track.group(1)), 'audio_file': audio_file,
-                         'album_title': album_title, 'album_artist': album_artist}
+                         'album_title': album_title, 'album_artist': album_artist,
+                         'album_date': album_date}
             continue
 
         # Use INDEX 01 as the authoritative start time
@@ -962,7 +964,6 @@ def parse_cue(cue_path: Path) -> list[dict]:
     if cur_track and 'number' in cur_track:
         tracks.append(cur_track)
 
-    # Filter out __album_date sentinel
     result = [t for t in tracks if 'number' in t]
     # Compute end times
     for i, t in enumerate(result):
@@ -1008,7 +1009,7 @@ def split_cue_album(cue_path: Path, album_meta_override: dict,
         final_genre  = album_meta_override.get('genre', '')
         if not final_genre:
             final_genre = classify_genre({'artist': final_artist, 'album': final_album})
-        final_year   = album_meta_override.get('year', '')
+        final_year   = album_meta_override.get('year', t.get('album_date', ''))
 
         dest_fn = f"{track_n:02d} - {sanitize(title, 100)}{ext}"
         dest_fp = staging_dir / dest_fn
@@ -1539,9 +1540,16 @@ def main(force: bool = False):
     print("\n🖼   Copying cover art …")
     art_done = set()
     art_copied = 0
+    _DISC_DIR_RE = re.compile(r'^CD\d+$', re.I)
     for t in all_tracks:
         dest_dir = t.get('dest_dir')
-        if not dest_dir or dest_dir in art_done:
+        if not dest_dir:
+            continue
+        # For multi-disc albums (dest_dir = album/CD01/, album/CD02/, …) place
+        # cover at the album level so DAPs see one cover per album, not per disc.
+        if _DISC_DIR_RE.match(dest_dir.name):
+            dest_dir = dest_dir.parent
+        if dest_dir in art_done:
             continue
         art_done.add(dest_dir)
 
@@ -1581,7 +1589,12 @@ def main(force: bool = False):
     seen           = set()
     for t in all_tracks:
         dest_dir = t.get('dest_dir')
-        if not dest_dir or dest_dir in seen:
+        if not dest_dir:
+            continue
+        # Multi-disc: download to album level, not per-disc
+        if _DISC_DIR_RE.match(dest_dir.name):
+            dest_dir = dest_dir.parent
+        if dest_dir in seen:
             continue
         seen.add(dest_dir)
         dst_art = dest_dir / 'folder.jpg'
@@ -1717,7 +1730,11 @@ def main(force: bool = False):
         if 'dest' in t:
             expected_files.add(t['dest'])
         if 'dest_dir' in t:
+            # folder.jpg may sit at the disc subfolder OR at the album level
+            # (multi-disc albums place it one level up). Allow both.
             expected_files.add(t['dest_dir'] / 'folder.jpg')
+            if _DISC_DIR_RE.match(t['dest_dir'].name):
+                expected_files.add(t['dest_dir'].parent / 'folder.jpg')
 
     orphans: list[Path] = []
     if MUSIC_DEST.exists():
