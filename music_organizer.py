@@ -1835,24 +1835,28 @@ def sync_to_sdcard(dest_root: Path, mirror: bool = False, dry: bool = False) -> 
     src = str(DEST).rstrip('/') + '/'           # trailing slash → copy contents, not folder
     dst = str(dest_root).rstrip('/') + '/'
 
+    # Pre-clean Apple metadata from source so it neither propagates to the
+    # card nor sticks around there in --mirror mode.
+    pruned = 0
+    for pat in ('.DS_Store', '._*'):
+        for p in DEST.rglob(pat):
+            try:
+                p.unlink()
+                pruned += 1
+            except Exception:
+                pass
+    if pruned:
+        print(f"   🧹  Pruned {pruned} .DS_Store / ._* file(s) from {DEST}")
+
     args = ['rsync',
             '-rltD',
             '--modify-window=2',
-            # Apple metadata that confuses some DAPs
-            '--exclude=.DS_Store',
-            '--exclude=._*',
-            # Filesystem-level macOS journals (auto-recreated, never music)
-            '--exclude=.fseventsd',
+            # macOS system dirs we cannot opendir (system-protected); rsync
+            # bails out of the directory walk if it hits these, so exclude.
+            # Walkman ignores any dot-prefixed entry anyway.
             '--exclude=.Spotlight-V100',
             '--exclude=.Trashes',
-            # Sony Walkman device files — must NOT be deleted in --mirror mode.
-            # `Playlist/*.dat` are on-device playlists the user built via the
-            # DAP UI (PlayingList, List1/2/3). DevLogo/DevIcon/capability are
-            # the device's own identification + branding files.
-            '--exclude=Playlist',
-            '--exclude=DevLogo.fil',
-            '--exclude=DevIcon.fil',
-            '--exclude=default-capability.xml',
+            '--exclude=.fseventsd',
             # Project bookkeeping; never music
             '--exclude=.gitkeep',
             '--exclude=.acoustid_cache.json',
