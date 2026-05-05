@@ -1395,25 +1395,30 @@ def main(force: bool = False):
         #   • album          : filled if missing OR if value came from path
         #     inference (folder-name placeholder like '李克勤' for the album).
         #   • date           : filled if missing.
+        aid_enriched = False
         if not override and (
             not meta.get('title')
             or not meta.get('artist')
             or not meta.get('album') or 'album' in inferred_only
         ):
             aid = acoustid_lookup(fp)
+            if aid:
+                aid_enriched = True
             # Only fill missing title/artist; never overwrite filename-parsed text
             for field in ('title', 'artist'):
                 if not meta.get(field) and aid.get(field):
                     meta[field] = aid[field]
             # Album + date: replace path-inferred placeholder, or fill if missing.
-            is_compilation = fp.parent in compilation_folders
             majority_album = folder_album_override.get(fp.parent)
             if majority_album and (not meta.get('album') or 'album' in inferred_only):
                 # Folder has a majority AcoustID album — apply it to all tracks
                 # so they stay grouped together, even if per-track AcoustID differs.
                 meta['album'] = majority_album
-            elif (aid.get('album') and not is_compilation
+            elif (aid.get('album')
                     and (not meta.get('album') or 'album' in inferred_only)):
+                # Apply per-track AcoustID album even inside compilation folders.
+                # Compilation guard only prevented grouping files under folder-name;
+                # per-track identification is always better than folder-name fallback.
                 meta['album'] = aid['album']
             if aid.get('date') and not meta.get('date') and not is_compilation:
                 meta['date'] = aid['date']
@@ -1488,8 +1493,11 @@ def main(force: bool = False):
         dest_fn = f"{tn} - {title}{ext}" if tn else f"{title}{ext}"
         dest_fp = dest_dir / dest_fn
 
-        # Decide whether metadata needs rewriting
-        needs_tag_write = bool(override or special_parse)
+        # Decide whether metadata needs rewriting in the dest copy.
+        # Triggers when: ALBUM_META override, special filename parser, or
+        # AcoustID enriched any field (so corrected tags land in the output
+        # file, not just used for folder path).
+        needs_tag_write = bool(override or special_parse or aid_enriched)
         meta_to_write = {
             'title':        meta.get('title') or fp.stem,
             'artist':       meta.get('artist') or 'Unknown',
