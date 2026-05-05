@@ -143,9 +143,7 @@ IMG_EXT   = {'.jpg','.jpeg','.png','.JPG','.JPEG','.PNG'}
 ARTIST_GENRE = {
     # MusicBrainz cannot find these → must keep as local overrides
     'mari nakamoto': 'Jazz',
-    # 唐朝乐队 — Chinese heavy metal band. MB correctly returns 'Metal' for '唐朝'
-    # but the local override used to say 'Chinese Rock' which was wrong.
-    '唐朝':          'Metal',
+
     'junkie xl':     'Soundtrack',
     '群星':           'Choral',
     # MusicBrainz returns 'Folk' for these — local Jazz override is intentional
