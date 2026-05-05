@@ -851,14 +851,17 @@ def infer_from_path(fp: Path) -> dict:
 
 
 def classify_genre(meta: dict) -> str:
-    artist = (meta.get('artist', '') or '').lower()
-    album  = (meta.get('album',  '') or '').lower()
-    title  = (meta.get('title',  '') or '').lower()
-    genre  = (meta.get('genre',  '') or '').strip()
+    artist       = (meta.get('artist',       '') or '').lower()
+    album_artist = (meta.get('album_artist', '') or '').lower()
+    album        = (meta.get('album',        '') or '').lower()
+    title        = (meta.get('title',        '') or '').lower()
+    genre        = (meta.get('genre',        '') or '').strip()
 
-    # 1. Local high-confidence rules
+    # 1. Local high-confidence rules — check artist and album_artist only, NOT
+    #    album title: album names frequently contain artist-name substrings that
+    #    cause false matches (e.g. 'beyond' matching "Beyond the Space..." album).
     for key, g in ARTIST_GENRE.items():
-        if key.lower() in artist or key.lower() in album:
+        if key.lower() in artist or key.lower() in album_artist:
             return g
 
     # 2. JAZZ_TITLES \u2014 specific song titles that signal Jazz
@@ -919,9 +922,13 @@ def parse_cue(cue_path: Path) -> list[dict]:
     tracks = []
     cur_track = {}
     album_title = ''
-    album_artist = ''
     album_date = ''
     audio_file = cue_path.parent / ''  # default: same dir
+
+    # Infer artist from "Artist - Album.cue" filename when PERFORMER is absent
+    _fn_stem = cue_path.stem  # e.g. "Pathfinder - Beyond the Space, Beyond the Time"
+    _fn_m = re.match(r'^(.+?)\s+-\s+.+$', _fn_stem)
+    album_artist = _fn_m.group(1).strip() if _fn_m else ''
 
     for line in content.splitlines():
         line = line.strip()
