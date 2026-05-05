@@ -149,8 +149,9 @@ ARTIST_GENRE = {
     # MusicBrainz returns 'Folk' for these — local Jazz override is intentional
     'alison krauss': 'Jazz',
     'eva cassidy':   'Jazz',
-    # CUE album default-genre bug fix (2025-05-04): keep until MB covers these reliably
-    '陈慧娴':         'Mandopop',
+    # 陈慧娴 (Priscilla Chan) — HK Cantopop singer. MB returns nothing for
+    # the simplified-Chinese name, so manual override is needed.
+    '陈慧娴':         'Cantopop',
     # MB has multiple "Anthony Wong" (actor 黄秋生 vs singer 黄耀明) and
     # picks the wrong one. We mean the Cantopop singer (Tat Ming Pair).
     'anthony wong':  'Cantopop',
