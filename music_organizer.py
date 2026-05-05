@@ -21,7 +21,7 @@ from __future__ import annotations
 import os, json, shutil, re, subprocess, sys, tempfile, time
 import urllib.request, urllib.parse
 from pathlib import Path
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 
 # ── Dependency bootstrap ───────────────────────────────────────────────────────
@@ -163,6 +163,10 @@ ARTIST_GENRE = {
     '信樂團':         'Rock',   # traditional script form
     # Pathfinder — Polish symphonic power metal; MB returns empty for this name.
     'pathfinder':    'Metal',
+    # Sally Yeh (叶倩文) — HK Cantopop singer. MB returns empty for English name.
+    'sally yeh':     'Cantopop',
+    # 刘若英 (René Liu) — Mandopop singer. MB incorrectly returns 'Classical'.
+    '刘若英':         'Mandopop',
     # '唐朝' covers both the short form (CUE artist tag) and '唐朝乐队' (folder-
     # inferred artist for tagless WAV files) via substring matching. MB knows
     # '唐朝' → Metal but returns empty for '唐朝乐队', so keeping this here
@@ -574,6 +578,15 @@ ALBUM_META = {
         'genre': 'Classical',
         'year': '',
         'parse': 'mozart_flac',
+    },
+    # 唐朝乐队 source folder mixes tracks from 梦回唐朝, 演义, 中國火, etc.
+    # AcoustID identifies them correctly per-track but compilation detection fires.
+    # User wants them grouped under 梦回唐朝 (the debut album, majority of tracks).
+    '唐朝乐队': {
+        'album':        '梦回唐朝',
+        'album_artist': '唐朝',
+        'artist':       '唐朝',
+        'genre':        'Metal',
     },
     '詹姆斯.莱文': {
         'album': 'Schubert: Trout Quintet & Arpeggione Sonata',
@@ -1249,11 +1262,12 @@ def main(force: bool = False):
         all_tracks.extend(tracks)
 
     # ── Step 2.5: Detect compilation folders ──────────────────────────────────
-    # If multiple files in the same source folder lack embedded album tags AND
-    # AcoustID would assign them to different albums, treat the folder as a
-    # compilation and keep the folder name as the album. Prevents scattering
-    # files like 'DISC 4/01.wav, 02.wav, 03.wav' across 3 unrelated MB releases.
-    compilation_folders = set()
+    # For folders where files lack embedded album tags, run AcoustID on all files
+    # and apply a majority-vote rule:
+    #   ≥ 50% of identified tracks → same album  →  use that album for all tracks
+    #   no clear majority (or < 50%)             →  treat as compilation, keep folder name
+    compilation_folders  = set()
+    folder_album_override: dict[Path, str] = {}   # folder → majority AcoustID album
     if _AID_KEY:
         def _has_album_meta_override(folder: Path) -> bool:
             fname = folder.name.lower()
@@ -1273,13 +1287,26 @@ def main(force: bool = False):
             needs_check = any(not probe(f).get('album') for f in files)
             if not needs_check:
                 continue
-            albums = set()
+            album_counts: Counter = Counter()
             for f in files:
                 aid = acoustid_lookup(f)
                 if aid.get('album'):
-                    albums.add(aid['album'])
-            if len(albums) > 1:
+                    album_counts[aid['album']] += 1
+            if not album_counts:
+                continue
+            total_identified = sum(album_counts.values())
+            top_album, top_count = album_counts.most_common(1)[0]
+            if top_count / total_identified >= 0.5:
+                # Clear majority — record override; all tracks in this folder will
+                # use this album regardless of per-track AcoustID result.
+                folder_album_override[folder] = top_album
+            elif len(album_counts) > 1:
                 compilation_folders.add(folder)
+
+        if folder_album_override:
+            print(f"\n📀  AcoustID majority-album applied ({len(folder_album_override)}):")
+            for folder, album in sorted(folder_album_override.items()):
+                print(f"    {folder.relative_to(SOURCE)} → '{album}'")
         if compilation_folders:
             print(f"\n📚  Compilation folders detected ({len(compilation_folders)}) "
                   f"— keeping folder name as album:")
@@ -1379,11 +1406,13 @@ def main(force: bool = False):
                 if not meta.get(field) and aid.get(field):
                     meta[field] = aid[field]
             # Album + date: replace path-inferred placeholder, or fill if missing.
-            # Skip both if folder was flagged as a compilation — different songs
-            # in the folder map to different MB releases, so per-track albums &
-            # years would scatter them. Keep folder name + no-year to group them.
             is_compilation = fp.parent in compilation_folders
-            if (aid.get('album') and not is_compilation
+            majority_album = folder_album_override.get(fp.parent)
+            if majority_album and (not meta.get('album') or 'album' in inferred_only):
+                # Folder has a majority AcoustID album — apply it to all tracks
+                # so they stay grouped together, even if per-track AcoustID differs.
+                meta['album'] = majority_album
+            elif (aid.get('album') and not is_compilation
                     and (not meta.get('album') or 'album' in inferred_only)):
                 meta['album'] = aid['album']
             if aid.get('date') and not meta.get('date') and not is_compilation:
