@@ -616,7 +616,7 @@ def sanitize(name: str, max_len: int = 120) -> str:
 
 
 def run(cmd, check=True) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True)
+    return subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', errors='replace')
 
 
 def _probe_wav_mutagen(path: Path) -> dict:
@@ -665,13 +665,20 @@ _JUNK_TAG_RE = re.compile(
 _PLACEHOLDER_TAGS = {
     'unknown artist', 'unknown title', 'unknown album', 'unknown',
     'untitled', 'track', 'no artist', 'no title', 'no album',
+    'artist', 'song', 'title', 'album', 'n/a', 'na', '-', '–',
 }
+
+# Strings consisting entirely of punctuation / whitespace (e.g. '???', '---')
+_ALL_JUNK_CHARS_RE = re.compile(r'^[\?\!\.\-–\s]+$')
 
 def _clean_junk(s: str) -> str:
     """Return '' if the value is a URL/website watermark or a generic placeholder."""
     if not s:
         return ''
-    if s.strip().lower() in _PLACEHOLDER_TAGS:
+    stripped = s.strip()
+    if stripped.lower() in _PLACEHOLDER_TAGS:
+        return ''
+    if _ALL_JUNK_CHARS_RE.match(stripped):
         return ''
     return '' if _JUNK_TAG_RE.search(s) else s
 
@@ -701,9 +708,9 @@ def probe(path: Path) -> dict:
         'album_artist': raw_album_artist or raw_artist,
         'album':        raw_album,
         'genre':        raw_genre,
-        'date':         tags.get('date', ''),
-        'track':        tags.get('track', ''),
-        'disc':         tags.get('disc', ''),
+        'date':         _clean_junk(tags.get('date', '')),
+        'track':        _clean_junk(tags.get('track', '')),
+        'disc':         _clean_junk(tags.get('disc', '')),
         'codec':        audio.get('codec_name', ''),
         'duration':     float(fmt.get('duration', 0)),
         'bitrate':      int(fmt.get('bit_rate', 0) or 0),
@@ -714,7 +721,7 @@ def probe(path: Path) -> dict:
         mu = _probe_wav_mutagen(path)
         for key in ('title', 'artist', 'album_artist', 'album', 'genre', 'date', 'track', 'disc'):
             v = mu.get(key)
-            if v and key in ('artist', 'album_artist', 'album', 'genre'):
+            if v:
                 v = _clean_junk(v)
             if v:
                 result[key] = v
@@ -723,7 +730,11 @@ def probe(path: Path) -> dict:
 
 def year(s: str) -> str:
     m = re.search(r'\b(\d{4})\b', s or '')
-    return m.group(1) if m else ''
+    if m:
+        y = int(m.group(1))
+        if 1900 <= y <= 2100:
+            return m.group(1)
+    return ''
 
 
 def track_num(s: str) -> str:
@@ -1405,6 +1416,7 @@ def main(force: bool = False):
             not meta.get('title')
             or not meta.get('artist')
             or not meta.get('album') or 'album' in inferred_only
+            or not meta.get('date')
         ):
             aid = acoustid_lookup(fp)
             if aid:
@@ -1499,10 +1511,10 @@ def main(force: bool = False):
         dest_fp = dest_dir / dest_fn
 
         # Decide whether metadata needs rewriting in the dest copy.
-        # Triggers when: ALBUM_META override, special filename parser, or
-        # AcoustID enriched any field (so corrected tags land in the output
-        # file, not just used for folder path).
-        needs_tag_write = bool(override or special_parse or aid_enriched)
+        # Triggers when: ALBUM_META override, special filename parser,
+        # AcoustID enriched any field, or path inference filled any field
+        # (so corrected tags land in the output file, not just the folder path).
+        needs_tag_write = bool(override or special_parse or aid_enriched or inferred_only)
         meta_to_write = {
             'title':        meta.get('title') or fp.stem,
             'artist':       meta.get('artist') or 'Unknown',
