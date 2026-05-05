@@ -1838,8 +1838,22 @@ def sync_to_sdcard(dest_root: Path, mirror: bool = False, dry: bool = False) -> 
     args = ['rsync',
             '-rltD',
             '--modify-window=2',
+            # Apple metadata that confuses some DAPs
             '--exclude=.DS_Store',
             '--exclude=._*',
+            # Filesystem-level macOS journals (auto-recreated, never music)
+            '--exclude=.fseventsd',
+            '--exclude=.Spotlight-V100',
+            '--exclude=.Trashes',
+            # Sony Walkman device files — must NOT be deleted in --mirror mode.
+            # `Playlist/*.dat` are on-device playlists the user built via the
+            # DAP UI (PlayingList, List1/2/3). DevLogo/DevIcon/capability are
+            # the device's own identification + branding files.
+            '--exclude=Playlist',
+            '--exclude=DevLogo.fil',
+            '--exclude=DevIcon.fil',
+            '--exclude=default-capability.xml',
+            # Project bookkeeping; never music
             '--exclude=.gitkeep',
             '--exclude=.acoustid_cache.json',
             '--exclude=.acoustid_key',
