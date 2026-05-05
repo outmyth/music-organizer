@@ -998,7 +998,13 @@ def split_cue_album(cue_path: Path, album_meta_override: dict,
 
         # Apply album overrides
         final_artist = normalize_multi_artist(canonicalize(album_meta_override.get('artist', artist)))
+        # Strip trailing ' CD1' / ' Disc 2' / ' DISK 03' from album title — disc
+        # info goes via the disc field, not duplicated into the album name.
+        # Only trailing matches (anchored at end) to avoid false positives like
+        # 'Live in Tokyo CD1' (rare; would still match, but acceptable trade).
         final_album  = album_meta_override.get('album', alb_ttl)
+        final_album  = re.sub(r'\s*[\(\[]?(?:CD|DISC|DISK|D)\s*\d+[\)\]]?\s*$',
+                              '', final_album, flags=re.I).strip()
         final_genre  = album_meta_override.get('genre', '')
         if not final_genre:
             final_genre = classify_genre({'artist': final_artist, 'album': final_album})
@@ -1260,11 +1266,20 @@ def main(force: bool = False):
     # CD2 ends up in CD02/, looking asymmetric.
     multi_disc_albums = set()  # set of (album_artist, album) keys
     _album_discs = defaultdict(set)
+    # 1. Individual files (still need probing)
     for fp in audio_files:
         m = probe(fp)
         aa = m.get('album_artist') or m.get('artist') or ''
         al = m.get('album', '')
         d  = (m.get('disc', '') or '').lstrip('0') or '1'
+        _album_discs[(aa, al)].add(d)
+    # 2. CUE-derived tracks (already populated in all_tracks by Step 2). After
+    #    the album-name strip in split_cue_album, both 几时再见演唱会 CD1 +
+    #    CD2 share the same key here, with discs {'1', '2'} → flagged multi-disc.
+    for t in all_tracks:
+        aa = t.get('album_artist') or t.get('artist') or ''
+        al = t.get('album', '')
+        d  = (t.get('disc', '') or '').lstrip('0') or '1'
         _album_discs[(aa, al)].add(d)
     for key, discs in _album_discs.items():
         # Multi-disc if any disc number ≥ 2
@@ -1485,7 +1500,17 @@ def main(force: bool = False):
         ext    = src.suffix
 
         alb_folder = f"({yr}) {album}" if yr else album
-        disc_folder = f"CD{disc}" if disc and disc.lstrip('0') else ''
+        # Same multi-disc rule as Step 3: CDxx/ subfolder for ALL discs of a
+        # multi-disc album (including disc 1), flat for single-disc.
+        cue_is_multi = (t.get('album_artist') or t.get('artist') or '',
+                        t.get('album', '')) in multi_disc_albums
+        if cue_is_multi:
+            d = (disc.lstrip('0') or '1')
+            disc_folder = f"CD{int(d):02d}"
+        elif disc and disc.lstrip('0') and disc.lstrip('0') != '1':
+            disc_folder = f"CD{disc}"
+        else:
+            disc_folder = ''
         cat = t.get('test_category', '')
         if cat:
             dest_dir = MUSIC_DEST / 'Test' / sanitize(cat) / sanitize(genre) / artist / sanitize(alb_folder)
