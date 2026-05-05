@@ -293,10 +293,11 @@ Implementation details:
   not music.
 - If the destination doesn't exist, the script lists `/Volumes/*` so you can
   see what's currently mounted.
-- macOS bundled rsync (2.6.9) shows non-ASCII filenames as `\#NNN` octal
-  escapes in `--dry-run` output. That's a display-only quirk; actual
-  transfers handle UTF-8 correctly. Install rsync 3.x via Homebrew if you
-  want clean Chinese names in dry-run previews.
+- macOS bundled rsync (2.6.9 at `/usr/bin/rsync`) shows non-ASCII filenames
+  as `\#NNN` octal escapes in `--dry-run` output. Actual transfers handle
+  UTF-8 correctly either way, but install rsync 3.x for clean previews:
+  `brew install rsync` puts 3.x at `/opt/homebrew/bin/rsync`, which is
+  earlier on `PATH` than the system one — no further config needed.
 
 ---
 
