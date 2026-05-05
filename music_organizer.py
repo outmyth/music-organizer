@@ -149,12 +149,12 @@ ARTIST_GENRE = {
     # MusicBrainz returns 'Folk' for these — local Jazz override is intentional
     'alison krauss': 'Jazz',
     'eva cassidy':   'Jazz',
-    # 陈慧娴 (Priscilla Chan) — HK Cantopop singer. MB returns nothing for
+    # 陈慧娴 (Priscilla Chan) — HK Pop singer. MB returns nothing for
     # the simplified-Chinese name, so manual override is needed.
-    '陈慧娴':         'Cantopop',
+    '陈慧娴':         'Pop',
     # MB has multiple "Anthony Wong" (actor 黄秋生 vs singer 黄耀明) and
-    # picks the wrong one. We mean the Cantopop singer (Tat Ming Pair).
-    'anthony wong':  'Cantopop',
+    # picks the wrong one. We mean the Pop singer (Tat Ming Pair).
+    'anthony wong':  'Pop',
     # MB tags BEYOND as Cantopop (correct — they sing in Cantonese), but
     # they're widely considered a rock band. User preference: Rock folder.
     'beyond':        'Rock',
@@ -163,10 +163,10 @@ ARTIST_GENRE = {
     '信樂團':         'Rock',   # traditional script form
     # Pathfinder — Polish symphonic power metal; MB returns empty for this name.
     'pathfinder':    'Metal',
-    # Sally Yeh (叶倩文) — HK Cantopop singer. MB returns empty for English name.
-    'sally yeh':     'Cantopop',
-    # 刘若英 (René Liu) — Mandopop singer. MB incorrectly returns 'Classical'.
-    '刘若英':         'Mandopop',
+    # Sally Yeh (叶倩文) — HK Pop singer. MB returns empty for English name.
+    'sally yeh':     'Pop',
+    # 刘若英 (René Liu) — Pop singer. MB incorrectly returns 'Classical'.
+    '刘若英':         'Pop',
     # '唐朝' covers both the short form (CUE artist tag) and '唐朝乐队' (folder-
     # inferred artist for tagless WAV files) via substring matching. MB knows
     # '唐朝' → Metal but returns empty for '唐朝乐队', so keeping this here
@@ -191,11 +191,11 @@ GENRE_MAP = {
     'thrash metal':'Metal','speed metal':'Metal','progressive metal':'Metal',
     'gothic metal':'Metal','doom metal':'Metal',
     '金属':'Metal','金屬':'Metal','重金属':'Metal','重金屬':'Metal',  # zh: metal
-    'chinese rock':'Chinese Rock',
-    'cantopop':'Cantopop','cantonese':'Cantopop','粤语':'Cantopop','粵語':'Cantopop',
-    'mandopop':'Mandopop','mandarin':'Mandopop','国语':'Mandopop','國語':'Mandopop',
-    'j-pop':'J-Pop','jpop':'J-Pop','japanese pop':'J-Pop',
-    'k-pop':'K-Pop','kpop':'K-Pop','korean pop':'K-Pop',
+    'chinese rock':'Rock',
+    'cantopop':'Pop','cantonese pop':'Pop','cantonese':'Pop','粤语':'Pop','粵語':'Pop',
+    'mandopop':'Pop','mandarin pop':'Pop','mandarin':'Pop','国语':'Pop','國語':'Pop',
+    'j-pop':'Pop','jpop':'Pop','japanese pop':'Pop',
+    'k-pop':'Pop','kpop':'Pop','korean pop':'Pop',
     'electronic':'Electronic','edm':'Electronic',
     'soundtrack':'Soundtrack','soundtracks':'Soundtrack','film score':'Soundtrack',
     '原声':'Soundtrack','原声带':'Soundtrack','原聲帶':'Soundtrack',  # zh: soundtrack
@@ -222,14 +222,14 @@ _MB_LAST_REQ   = 0.0
 
 # MusicBrainz tag → our genre label
 _MB_TAG_MAP = {
-    'cantopop':      'Cantopop',
-    'cantonese pop': 'Cantopop',
-    'cantonese':     'Cantopop',
-    'mandopop':      'Mandopop',
-    'mandarin pop':  'Mandopop',
-    'chinese pop':   'Mandopop',
-    'c-pop':         'Mandopop',
-    'chinese rock':  'Chinese Rock',
+    'cantopop':      'Pop',
+    'cantonese pop': 'Pop',
+    'cantonese':     'Pop',
+    'mandopop':      'Pop',
+    'mandarin pop':  'Pop',
+    'chinese pop':   'Pop',
+    'c-pop':         'Pop',
+    'chinese rock':  'Rock',
     'jazz':          'Jazz',
     'vocal jazz':    'Jazz',
     'jazz vocal':    'Jazz',
@@ -887,9 +887,8 @@ def classify_genre(meta: dict) -> str:
         return 'Jazz'
 
     # 3. MusicBrainz lookup BEFORE embedded-genre / Chinese-fallback.
-    #    MB knows that \u5f20\u56fd\u8363/\u674e\u514b\u52e4 are Cantopop (not Mandopop) and that
-    #    Megadeth tagged 'Pop' is actually Metal. Without this ordering we'd
-    #    keep wrong embedded values and miss correct online ones.
+    #    MB knows that Megadeth tagged 'Pop' is actually Metal. Without this
+    #    ordering we'd keep wrong embedded values and miss correct online ones.
     mb = mb_lookup_genre(meta.get('artist', ''))
     if mb:
         return mb
@@ -907,8 +906,7 @@ def classify_genre(meta: dict) -> str:
                 return g
         return genre.title()
 
-    # 5. Chinese characters present but MB couldn't classify the artist \u2014
-    #    we can't tell Cantopop / Mandopop / J-Pop apart, so use generic Pop.
+    # 5. Chinese characters present but MB couldn't classify the artist \u2192 Pop.
     if any('\u4e00' <= c <= '\u9fff' for c in artist + album + title):
         return 'Pop'
 
