@@ -144,21 +144,14 @@ ARTIST_GENRE = {
     # MusicBrainz cannot find these → must keep as local overrides
     'mari nakamoto': 'Jazz',
     '唐朝':          'Chinese Rock',
-    'adele':         'Pop',
     'junkie xl':     'Soundtrack',
-    'carlo maria giulini': 'Classical',
-    'wiener philharmoniker': 'Classical',
-    'james levine':  'Classical',
-    'schubert':      'Classical',
-    'brahms':        'Classical',
-    'dvorák':        'Classical',    # MB only finds 'dvorak' (no accent)
-    'bach':          'Classical',
     '群星':           'Choral',
     # MusicBrainz returns 'Folk' for these — local Jazz override is intentional
     'alison krauss': 'Jazz',
     'eva cassidy':   'Jazz',
     # CUE album default-genre bug fix (2025-05-04): keep until MB covers these reliably
     '陈慧娴':         'Mandopop',
+    # 群星 is misclassified by MB as Various — keep our explicit Choral mapping
 }
 # Canonicalize all keys (trad → simp) so matching is script-agnostic.
 ARTIST_GENRE = {canonicalize(k): v for k, v in ARTIST_GENRE.items()}
@@ -656,17 +649,18 @@ def probe(path: Path) -> dict:
                    if s.get('codec_type') == 'audio'), {})
 
     # Strip junk watermarks (URLs, "WWW.HIFI369.COM" style download-site stamps)
-    # from artist / album_artist / album fields BEFORE the fallback chain.
+    # from artist / album_artist / album / genre fields BEFORE the fallback chain.
     raw_artist       = _clean_junk(tags.get('artist', ''))
     raw_album_artist = _clean_junk(tags.get('album_artist', ''))
     raw_album        = _clean_junk(tags.get('album', ''))
+    raw_genre        = _clean_junk(tags.get('genre', ''))
 
     result = {
         'title':        tags.get('title', ''),
         'artist':       raw_artist or raw_album_artist,
         'album_artist': raw_album_artist or raw_artist,
         'album':        raw_album,
-        'genre':        tags.get('genre', ''),
+        'genre':        raw_genre,
         'date':         tags.get('date', ''),
         'track':        tags.get('track', ''),
         'disc':         tags.get('disc', ''),
@@ -680,7 +674,7 @@ def probe(path: Path) -> dict:
         mu = _probe_wav_mutagen(path)
         for key in ('title', 'artist', 'album_artist', 'album', 'genre', 'date', 'track', 'disc'):
             v = mu.get(key)
-            if v and key in ('artist', 'album_artist', 'album'):
+            if v and key in ('artist', 'album_artist', 'album', 'genre'):
                 v = _clean_junk(v)
             if v:
                 result[key] = v
