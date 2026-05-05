@@ -1831,6 +1831,29 @@ def main(force: bool = False):
         for artist, local, mb in conflicts:
             print(f"    '{artist}': local={local!r}  MB={mb!r}")
 
+    # ── ALBUM_META genre audit (cache only) ──────────────────────────────────
+    # For each ALBUM_META entry with a named artist, check if MB's genre
+    # disagrees with the manually set genre field.
+    # Skip entries where artist is Various/* (no meaningful MB lookup target).
+    album_conflicts = []
+    for folder_key, meta in ALBUM_META.items():
+        genre_local = meta.get('genre', '')
+        if not genre_local:
+            continue
+        artist = (meta.get('artist') or meta.get('album_artist') or '').strip()
+        # Skip generic / compound artists that MB can't meaningfully classify
+        if not artist or re.match(r'^various', artist, re.I):
+            continue
+        # For "Artist / Other" take the first token
+        artist_key = re.split(r'\s*/\s*', artist)[0].strip().lower()
+        mb_genre = _MB_CACHE.get(artist_key, '')
+        if mb_genre and mb_genre != genre_local:
+            album_conflicts.append((folder_key, artist, genre_local, mb_genre))
+    if album_conflicts:
+        print(f"\n⚠️   ALBUM_META genre conflicts with MusicBrainz ({len(album_conflicts)}) — verify intentional:")
+        for folder_key, artist, local, mb in album_conflicts:
+            print(f"    '{folder_key}' ({artist}): local={local!r}  MB={mb!r}")
+
     print(f"\n✅  Done! Output: {DEST}")
     print("=" * 65)
 
