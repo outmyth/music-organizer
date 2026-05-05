@@ -127,7 +127,7 @@ def _is_various_marker(s: str) -> bool:
     return bool(s) and s.strip().lower() in _VARIOUS_MARKERS
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-_HERE      = Path(__file__).parent
+_HERE      = Path(__file__).resolve().parent
 SOURCE     = _HERE / "in"
 TEST_ROOT  = SOURCE / 'Test'    # fixed folder; sub-dirs become category names
 DEST         = _HERE / "out"
@@ -1174,8 +1174,8 @@ def probe(path: Path) -> dict:
         'bitrate':      int(fmt.get('bit_rate', 0) or 0),
     }
     # WAV files may store tags in an ID3 chunk that ffprobe can't decode.
-    # Fall back to mutagen when ffprobe returns garbled (all-'?') values.
-    if _MUTAGEN_OK and path.suffix.lower() == '.wav' and _has_garbled(result):
+    # Check for garbled on raw tags (before _clean_junk converts '??' to '').
+    if _MUTAGEN_OK and path.suffix.lower() == '.wav' and _has_garbled(tags):
         mu = _probe_wav_mutagen(path)
         for key in ('title', 'artist', 'album_artist', 'album', 'genre', 'date', 'track', 'disc'):
             v = mu.get(key)
@@ -1889,17 +1889,25 @@ def main(force: bool = False):
                 # Folder has a majority AcoustID album — apply it to all tracks
                 # so they stay grouped together, even if per-track AcoustID differs.
                 meta['album'] = majority_album
+                inferred_only.discard('album')
             elif (aid.get('album')
                     and (not meta.get('album') or 'album' in inferred_only)):
                 # Apply per-track AcoustID album even inside compilation folders.
                 # Compilation guard only prevented grouping files under folder-name;
                 # per-track identification is always better than folder-name fallback.
                 meta['album'] = aid['album']
+                inferred_only.discard('album')
             if aid.get('date') and not meta.get('date'):
                 meta['date'] = aid['date']
             # album_artist: fill if missing only
             if aid.get('artist') and not meta.get('album_artist'):
                 meta['album_artist'] = aid['artist']
+            # AcoustID fingerprint confirming the same artist/title as path inference
+            # means the inference was correct → promote to "reliable" for text services.
+            if aid.get('artist') and aid['artist'].lower() == meta.get('artist', '').lower():
+                inferred_only.discard('artist')
+            if aid.get('title') and aid['title'].lower() == meta.get('title', '').lower():
+                inferred_only.discard('title')
 
         # ── Text-based metadata fallback chain ────────────────────────────────
         # Each service fills whatever is still missing after the previous one.
