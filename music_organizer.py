@@ -662,9 +662,16 @@ _JUNK_TAG_RE = re.compile(
 )
 
 
+_PLACEHOLDER_TAGS = {
+    'unknown artist', 'unknown title', 'unknown album', 'unknown',
+    'untitled', 'track', 'no artist', 'no title', 'no album',
+}
+
 def _clean_junk(s: str) -> str:
-    """Return '' if the value is a URL/website watermark, else the original."""
+    """Return '' if the value is a URL/website watermark or a generic placeholder."""
     if not s:
+        return ''
+    if s.strip().lower() in _PLACEHOLDER_TAGS:
         return ''
     return '' if _JUNK_TAG_RE.search(s) else s
 
@@ -689,7 +696,7 @@ def probe(path: Path) -> dict:
     raw_genre        = _clean_junk(tags.get('genre', ''))
 
     result = {
-        'title':        tags.get('title', ''),
+        'title':        _clean_junk(tags.get('title', '')),
         'artist':       raw_artist or raw_album_artist,
         'album_artist': raw_album_artist or raw_artist,
         'album':        raw_album,
