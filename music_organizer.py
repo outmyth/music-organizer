@@ -325,6 +325,107 @@ def mb_lookup_genre(artist: str) -> str:
 _mb_load_cache()
 
 
+# ── MusicBrainz Recording lookup (artist + title → album / date) ──────────────
+# Uses the MB Recording search endpoint with inc=releases.
+# Separate cache from _MB_CACHE (which maps artist → genre).
+_MB_REC_CACHE_PATH = _HERE / '.mb_rec_cache.json'
+_MB_REC_CACHE: dict = {}
+
+
+def _mb_rec_load_cache() -> None:
+    global _MB_REC_CACHE
+    if _MB_REC_CACHE_PATH.exists():
+        try:
+            _MB_REC_CACHE = json.loads(_MB_REC_CACHE_PATH.read_text(encoding='utf-8'))
+        except Exception:
+            _MB_REC_CACHE = {}
+
+
+def _mb_rec_save_cache() -> None:
+    try:
+        _MB_REC_CACHE_PATH.write_text(
+            json.dumps(_MB_REC_CACHE, ensure_ascii=False, indent=2), encoding='utf-8')
+    except Exception:
+        pass
+
+
+def _mb_best_release(releases: list) -> dict:
+    """Pick the best release from a list: Official Album, earliest date."""
+    if not releases:
+        return {}
+    official   = [r for r in releases if r.get('status', '') == 'Official']
+    pool       = official or releases
+    albums     = [r for r in pool
+                  if r.get('release-group', {}).get('primary-type', '') == 'Album']
+    candidates = albums or pool
+
+    def _date_key(r):
+        d = r.get('date') or ''
+        return d if d else '9999'
+    best     = min(candidates, key=_date_key)
+    raw_date = best.get('date', '') or ''
+    yr_m     = re.match(r'(\d{4})', raw_date)
+    yr       = yr_m.group(1) if yr_m else ''
+    if yr and not (1900 <= int(yr) <= 2100):
+        yr = ''
+    return {'album': best.get('title', ''), 'date': yr}
+
+
+def mb_lookup_recording(artist: str, title: str) -> dict:
+    """Query MusicBrainz Recording API for album + date.
+
+    Two-step per candidate recording:
+      1. Search recording by artist+title (limit 5).
+      2. For each title-matching recording, browse its releases
+         (inc=release-groups, limit 50) to get the full release list.
+         Multiple recordings of the same song exist (studio, live, remix);
+         we try each and pick the best release across all of them.
+
+    Picks the earliest Official Album release.
+    Returns {'album': '...', 'date': 'YYYY'} or {}.
+    Cached by 'artist::title' (lowercased).
+    """
+    artist = (artist or '').strip()
+    title  = (title  or '').strip()
+    if not artist or not title:
+        return {}
+
+    cache_key = f"{artist.lower()}::{title.lower()}"
+    if cache_key in _MB_REC_CACHE:
+        return _MB_REC_CACHE[cache_key]
+
+    # Step 1: find all candidate recording MBIDs (title match, any version)
+    q    = urllib.parse.quote(f'recording:"{title}" AND artist:"{artist}"')
+    data = _mb_get(
+        f'https://musicbrainz.org/ws/2/recording?query={q}&limit=5&fmt=json'
+    )
+    mbids = [
+        rec['id'] for rec in data.get('recordings', [])
+        if rec.get('title', '').lower() == title.lower() and rec.get('id')
+    ]
+
+    # Step 2: browse releases for each MBID and accumulate all releases
+    all_releases: list = []
+    for mbid in mbids:
+        rel_data = _mb_get(
+            f'https://musicbrainz.org/ws/2/release'
+            f'?recording={mbid}&inc=release-groups&limit=50&fmt=json'
+        )
+        all_releases.extend(rel_data.get('releases', []))
+
+    result = _mb_best_release(all_releases)
+
+    _MB_REC_CACHE[cache_key] = result
+    _mb_rec_save_cache()
+    if result.get('album'):
+        print(f"   🌐  MusicBrainz: {artist!r} / {title!r}"
+              f" → album={result['album']!r} date={result['date']!r}")
+    return result
+
+
+_mb_rec_load_cache()
+
+
 # ── AcoustID acoustic fingerprint lookup ──────────────────────────────────────
 # Identifies tracks by audio content alone — no embedded tags or filenames needed.
 # Requires fpcalc (chromaprint) + an API key from https://acoustid.org/new-application
@@ -1536,10 +1637,27 @@ def main(force: bool = False):
             if aid.get('artist') and not meta.get('album_artist'):
                 meta['album_artist'] = aid['artist']
 
-        # iTunes Search API — tertiary fallback when AcoustID returned nothing
-        # and album or date is still missing. Needs title+artist to query.
-        itunes_enriched = False
+        # MusicBrainz Recording — secondary text-based fallback when AcoustID
+        # returned nothing and album or date is still missing.
+        mb_rec_enriched = False
         if (not override and not aid_enriched
+                and meta.get('title') and meta.get('artist')
+                and 'artist' not in inferred_only
+                and (not meta.get('album') or 'album' in inferred_only
+                     or not meta.get('date'))):
+            mbr = mb_lookup_recording(meta['artist'], meta['title'])
+            if mbr:
+                mb_rec_enriched = True
+                if mbr.get('album') and (not meta.get('album') or 'album' in inferred_only):
+                    meta['album'] = mbr['album']
+                    inferred_only.discard('album')   # no longer just a path guess
+                if mbr.get('date') and not meta.get('date'):
+                    meta['date'] = mbr['date']
+
+        # iTunes Search API — tertiary fallback when both AcoustID and MB Recording
+        # returned nothing and album or date is still missing. Needs title+artist to query.
+        itunes_enriched = False
+        if (not override and not aid_enriched and not mb_rec_enriched
                 and meta.get('title') and meta.get('artist')
                 and 'artist' not in inferred_only   # don't search with folder-name placeholder
                 and (not meta.get('album') or 'album' in inferred_only
@@ -1626,7 +1744,7 @@ def main(force: bool = False):
         # Triggers when: ALBUM_META override, special filename parser,
         # AcoustID enriched any field, or path inference filled any field
         # (so corrected tags land in the output file, not just the folder path).
-        needs_tag_write = bool(override or special_parse or aid_enriched or itunes_enriched or inferred_only)
+        needs_tag_write = bool(override or special_parse or aid_enriched or mb_rec_enriched or itunes_enriched or inferred_only)
         meta_to_write = {
             'title':        meta.get('title') or fp.stem,
             'artist':       meta.get('artist') or 'Unknown',
