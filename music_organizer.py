@@ -458,6 +458,99 @@ def acoustid_lookup(fp: Path) -> dict:
 _aid_load_cache()
 
 
+# ── iTunes Search API — tertiary metadata fallback ────────────────────────────
+# Free, no key required. Query by artist+title to fill album/date/genre when
+# both AcoustID and embedded tags couldn't provide them.
+# Rate limit: Apple recommends ≤20 req/min; we use 1 req/2 sec to be safe.
+_ITUNES_CACHE_PATH = _HERE / '.itunes_cache.json'
+_ITUNES_CACHE: dict = {}
+_ITUNES_LAST_REQ   = 0.0
+
+
+def _itunes_load_cache() -> None:
+    global _ITUNES_CACHE
+    if _ITUNES_CACHE_PATH.exists():
+        try:
+            _ITUNES_CACHE = json.loads(_ITUNES_CACHE_PATH.read_text(encoding='utf-8'))
+        except Exception:
+            _ITUNES_CACHE = {}
+
+
+def _itunes_save_cache() -> None:
+    try:
+        _ITUNES_CACHE_PATH.write_text(
+            json.dumps(_ITUNES_CACHE, ensure_ascii=False, indent=2), encoding='utf-8')
+    except Exception:
+        pass
+
+
+def itunes_lookup(artist: str, title: str) -> dict:
+    """Query iTunes Search API for track metadata. Returns dict with album/date/genre or {}.
+
+    Only called when AcoustID returned nothing AND at least one of album/date is
+    still missing — avoids unnecessary requests for well-tagged files.
+    Cached by 'artist::title' key (lowercased).
+    """
+    global _ITUNES_LAST_REQ
+    artist = (artist or '').strip()
+    title  = (title  or '').strip()
+    if not artist or not title:
+        return {}
+
+    cache_key = f"{artist.lower()}::{title.lower()}"
+    if cache_key in _ITUNES_CACHE:
+        return _ITUNES_CACHE[cache_key]
+
+    elapsed = time.time() - _ITUNES_LAST_REQ
+    if elapsed < 2.0:
+        time.sleep(2.0 - elapsed)
+
+    term = urllib.parse.quote(f"{artist} {title}")
+    url  = f'https://itunes.apple.com/search?term={term}&entity=song&limit=5&media=music'
+    req  = urllib.request.Request(url, headers={'User-Agent': 'MusicOrganizer/2.0 (outmyth@gmail.com)'})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            _ITUNES_LAST_REQ = time.time()
+            data = json.loads(resp.read().decode('utf-8'))
+    except Exception:
+        _ITUNES_LAST_REQ = time.time()
+        _ITUNES_CACHE[cache_key] = {}
+        _itunes_save_cache()
+        return {}
+
+    results = data.get('results', [])
+    # Pick the first result whose artistName fuzzy-matches the query artist.
+    a_lower = artist.lower()
+    match = next(
+        (r for r in results
+         if a_lower in r.get('artistName', '').lower()
+         or r.get('artistName', '').lower() in a_lower),
+        results[0] if results else None,
+    )
+    if not match:
+        _ITUNES_CACHE[cache_key] = {}
+        _itunes_save_cache()
+        return {}
+
+    # Extract year from releaseDate ('YYYY-MM-DD' or 'YYYY-MM-DDT…')
+    release = match.get('releaseDate', '')
+    yr_m = re.match(r'(\d{4})', release)
+    result = {
+        'album': match.get('collectionName', ''),
+        'date':  yr_m.group(1) if yr_m else '',
+        'genre': match.get('primaryGenreName', ''),
+    }
+    # Don't keep empty dicts — store None-equivalent so we don't re-query
+    _ITUNES_CACHE[cache_key] = result
+    _itunes_save_cache()
+    if any(result.values()):
+        print(f"   🍎  iTunes: {artist!r} / {title!r} → album={result['album']!r} date={result['date']!r}")
+    return result
+
+
+_itunes_load_cache()
+
+
 # ── Cover Art Archive (CAA) — automatic cover download ────────────────────────
 # When a destination album folder ends up without folder.jpg (no cover found
 # in the source), search MusicBrainz for the release and pull the front cover
@@ -1443,6 +1536,25 @@ def main(force: bool = False):
             if aid.get('artist') and not meta.get('album_artist'):
                 meta['album_artist'] = aid['artist']
 
+        # iTunes Search API — tertiary fallback when AcoustID returned nothing
+        # and album or date is still missing. Needs title+artist to query.
+        itunes_enriched = False
+        if (not override and not aid_enriched
+                and meta.get('title') and meta.get('artist')
+                and 'artist' not in inferred_only   # don't search with folder-name placeholder
+                and (not meta.get('album') or 'album' in inferred_only
+                     or not meta.get('date'))):
+            itunes = itunes_lookup(meta['artist'], meta['title'])
+            if itunes:
+                itunes_enriched = True
+                if itunes.get('album') and (not meta.get('album') or 'album' in inferred_only):
+                    meta['album'] = itunes['album']
+                if itunes.get('date') and not meta.get('date'):
+                    meta['date'] = itunes['date']
+                # iTunes genre: only use as last resort (weaker than MB or embedded tag)
+                if itunes.get('genre') and not meta.get('genre'):
+                    meta['genre'] = itunes['genre']
+
         # Apply album overrides (highest priority for album/genre/year)
         for k in ('album','album_artist','artist','genre','year'):
             if k in override:
@@ -1514,7 +1626,7 @@ def main(force: bool = False):
         # Triggers when: ALBUM_META override, special filename parser,
         # AcoustID enriched any field, or path inference filled any field
         # (so corrected tags land in the output file, not just the folder path).
-        needs_tag_write = bool(override or special_parse or aid_enriched or inferred_only)
+        needs_tag_write = bool(override or special_parse or aid_enriched or itunes_enriched or inferred_only)
         meta_to_write = {
             'title':        meta.get('title') or fp.stem,
             'artist':       meta.get('artist') or 'Unknown',
