@@ -151,7 +151,9 @@ ARTIST_GENRE = {
     'eva cassidy':   'Jazz',
     # CUE album default-genre bug fix (2025-05-04): keep until MB covers these reliably
     '陈慧娴':         'Mandopop',
-    # 群星 is misclassified by MB as Various — keep our explicit Choral mapping
+    # MB has multiple "Anthony Wong" (actor 黄秋生 vs singer 黄耀明) and
+    # picks the wrong one. We mean the Cantopop singer (Tat Ming Pair).
+    'anthony wong':  'Cantopop',
 }
 # Canonicalize all keys (trad → simp) so matching is script-agnostic.
 ARTIST_GENRE = {canonicalize(k): v for k, v in ARTIST_GENRE.items()}
@@ -858,10 +860,16 @@ def classify_genre(meta: dict) -> str:
     if mb:
         return mb
 
-    # 4. Embedded `genre` tag, normalized via GENRE_MAP
-    if genre and genre.lower() not in ('other', 'unknown', ''):
+    # 4. Embedded `genre` tag, normalized via GENRE_MAP.
+    # Some labels stuff uninformative marketing strings into the genre field
+    # (e.g. 'Musiques du monde, Asie' = "World Music, Asia" — French
+    # distribution catalog tag). Treat those as missing so we fall through.
+    g_lower = genre.lower()
+    _UNINFORMATIVE_GENRE = ('other', 'unknown', 'misc', 'world',
+                            'musiques du monde', 'world music')
+    if genre and not any(u in g_lower for u in _UNINFORMATIVE_GENRE):
         for key, g in GENRE_MAP.items():
-            if key in genre.lower():
+            if key in g_lower:
                 return g
         return genre.title()
 
