@@ -961,6 +961,10 @@ def parse_cue(cue_path: Path) -> list[dict]:
         m_date = re.match(r'^REM\s+DATE\s+(\d+)', line, re.IGNORECASE)
         if m_date:
             album_date = m_date.group(1)
+            # Retroactively fix current track if its date was captured before
+            # REM DATE appeared (common when DATE is inside the TRACK block).
+            if cur_track and not cur_track.get('album_date'):
+                cur_track['album_date'] = album_date
             continue
 
         m_track = re.match(r'^TRACK\s+(\d+)\s+AUDIO', line, re.IGNORECASE)
@@ -1193,8 +1197,12 @@ def main(force: bool = False):
         for f in fp_list:
             ext = f.suffix.lower()
             if ext in AUDIO_EXT:
-                # Skip files that are CUE image sources (handled separately)
-                already_cue = any(ref == f for _, ref in cue_albums)
+                # Skip files that are CUE image sources (handled separately).
+                # Use case-insensitive comparison: CUE sheets often store
+                # filenames in ALL-CAPS (e.g. ".WAV") while the actual file
+                # is lowercase (".wav"), causing a case-sensitive Path == to miss.
+                already_cue = any(str(ref).lower() == str(f).lower()
+                                  for _, ref in cue_albums)
                 if not already_cue:
                     audio_files.append(f)
 
