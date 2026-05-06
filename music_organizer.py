@@ -1212,6 +1212,90 @@ def _has_garbled(tags: dict) -> bool:
     return False
 
 
+# Mojibake markers: when WAV INFO chunk is GBK but ffmpeg decoded as latin-1,
+# we get high-bit Latin punctuation that's vanishingly rare in real metadata.
+# Replacement char (U+FFFD) → corruption.  Combinations like '¬'+something or
+# '͢' (combining diacritic in non-IPA text) reliably indicate GBK mojibake.
+_MOJIBAKE_RE = re.compile(r'[�¨©¬­®¯]'
+                          r'|[À-ÿ]{2,}', re.UNICODE)
+
+def _is_mojibake(s: str) -> bool:
+    """Heuristic: True if string looks like mis-decoded multi-byte text."""
+    if not s:
+        return False
+    # Round-trip latin-1 → gbk: if it succeeds, this WAS GBK bytes mis-decoded.
+    try:
+        recovered = s.encode('latin-1', errors='strict').decode('gbk', errors='strict')
+        # Recovered text contains CJK → original was Chinese GBK
+        if any('一' <= c <= '鿿' for c in recovered):
+            return True
+    except Exception:
+        pass
+    return bool(_MOJIBAKE_RE.search(s))
+
+
+def _probe_wav_info_chunk(path: Path) -> dict:
+    """Read RIFF INFO chunk directly from WAV bytes; decode as GBK first
+    (Chinese audiophile rips), then UTF-8/Big5/latin-1.  Returns standard tag
+    dict.  Critical for files from HiFi3655 / 发烧友 / 网盘 sources where
+    ffmpeg's default latin-1 decode produces mojibake (¬��͢ Ī��ε ...)."""
+    import struct
+    INFO_MAP = {
+        b'INAM': 'title',
+        b'IART': 'artist',
+        b'IPRD': 'album',
+        b'IGNR': 'genre',
+        b'ICRD': 'date',
+        b'ITRK': 'track',
+        b'IPRT': 'track',
+    }
+    try:
+        with open(path, 'rb') as f:
+            head = f.read(16384)
+    except Exception:
+        return {}
+    info_pos = head.find(b'INFO')
+    if info_pos < 0:
+        return {}
+    chunk = head[info_pos:]
+    result = {}
+    for sub_id, key in INFO_MAP.items():
+        p = chunk.find(sub_id)
+        if p < 0:
+            continue
+        try:
+            size = struct.unpack('<I', chunk[p+4:p+8])[0]
+            if size > 1024 or size <= 0:
+                continue
+            raw = chunk[p+8:p+8+size].rstrip(b'\x00\x20')
+        except Exception:
+            continue
+        if not raw:
+            continue
+        # GBK first — covers vast majority of Chinese rips. Validate by checking
+        # the decoded result actually contains CJK (avoid mis-decoding pure ASCII).
+        decoded = ''
+        for enc in ('gbk', 'gb18030', 'big5'):
+            try:
+                cand = raw.decode(enc).strip()
+                if any('一' <= c <= '鿿' for c in cand):
+                    decoded = cand
+                    break
+            except Exception:
+                continue
+        if not decoded:
+            for enc in ('utf-8', 'latin-1'):
+                try:
+                    decoded = raw.decode(enc).strip()
+                    if decoded:
+                        break
+                except Exception:
+                    continue
+        if decoded:
+            result[key] = decoded
+    return result
+
+
 # URL / download-site watermarks that some Chinese rip sources stuff into
 # tag fields (especially album_artist). Treat as missing.
 _JUNK_TAG_RE = re.compile(
@@ -1285,6 +1369,23 @@ def probe(path: Path) -> dict:
                 v = _clean_junk(v)
             if v:
                 result[key] = v
+
+    # WAV INFO chunk: Chinese audiophile rips (HiFi3655, 发烧友, 网盘 sources)
+    # write GBK bytes directly into INFO chunk. ffmpeg decodes those as latin-1,
+    # producing mojibake like '¬��͢, Ī��ε' for what should be '卢冠廷, 莫文蔚'.
+    # Detect via _is_mojibake() (round-trip latin-1→GBK yields CJK), then re-read
+    # the INFO chunk bytes ourselves with GBK.
+    if path.suffix.lower() == '.wav' and any(
+            _is_mojibake(result.get(k, '')) for k in ('artist','album','title')):
+        info = _probe_wav_info_chunk(path)
+        for key in ('title', 'artist', 'album', 'genre', 'date', 'track'):
+            v = info.get(key)
+            if v:
+                v = _clean_junk(v)
+            if v:
+                result[key] = v
+                if key == 'artist':
+                    result['album_artist'] = v
     return result
 
 
