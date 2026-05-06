@@ -1815,13 +1815,15 @@ def _has_junk_source_field(fp: Path) -> bool:
             continue
         kl = k.lower()
         if kl in ('comment', 'encoded_by', 'description',
-                  'general_remark', 'originator_reference'):
+                  'general_remark', 'originator_reference', 'creating_machine',
+                  'lyricist', 'composer', 'publisher'):
             if (_JUNK_TAG_RE.search(v) or 'SACD Ripper' in v
                     or 'PT80' in v or 'hifi' in v.lower()
-                    or '[www.' in v.lower()):
+                    or '[www.' in v.lower() or 't.me/' in v.lower()):
                 return True
         elif kl in ('title', 'artist', 'album', 'album_artist', 'genre'):
-            if _is_mojibake(v):
+            # User-facing fields: any junk pattern (URL/watermark) OR mojibake
+            if _JUNK_TAG_RE.search(v) or _is_mojibake(v):
                 return True
     return False
 
@@ -1844,15 +1846,21 @@ def writeback_to_source(fp: Path, enriched: dict, original: dict) -> bool:
     suffix = fp.suffix
     tmp_path = fp.parent / (fp.stem + '.__tmp__' + suffix)  # keep real ext so ffmpeg knows format
     try:
+        # Use -map_metadata -1 to wipe ALL source tags, then re-add the merged
+        # set (original good fields + delta from enrichment). Same reason as
+        # copy_with_meta: avoids case-insensitive vorbis duplicates and junk
+        # in comment/encoded_by/description surviving the rewrite.
+        merged = {k: enriched.get(k) or original.get(k)
+                  for k in ('title','artist','album_artist','album',
+                            'genre','date','track','disc')}
         meta_args = []
-        for k, v in delta.items():
-            ffmpeg_key = 'album_artist' if k == 'album_artist' else k
-            meta_args += ['-metadata', f'{ffmpeg_key}={v}']
-        # Always clear junk-prone fields when rewriting source
-        for junk_field in ('comment', 'encoded_by', 'description',
-                           'general_remark', 'originator_reference'):
-            meta_args += ['-metadata', f'{junk_field}=']
-        r = run(['ffmpeg', '-y', '-i', str(fp), '-c', 'copy'] + meta_args + [str(tmp_path)])
+        for k, v in merged.items():
+            if v:
+                ffmpeg_key = 'album_artist' if k == 'album_artist' else k
+                meta_args += ['-metadata', f'{ffmpeg_key}={v}']
+        r = run(['ffmpeg', '-y', '-i', str(fp),
+                 '-map_metadata', '-1',
+                 '-c', 'copy'] + meta_args + [str(tmp_path)])
         if r.returncode == 0 and tmp_path.exists():
             tmp_path.replace(fp)
             reason = []
@@ -1871,11 +1879,18 @@ def writeback_to_source(fp: Path, enriched: dict, original: dict) -> bool:
 
 
 def copy_with_meta(src: Path, dest: Path, meta: dict):
-    """Copy audio file to dest, writing metadata tags via ffmpeg.
-    Also wipes junk-prone source-only fields (comment / encoded_by /
-    description / general_remark / originator_reference) which commonly carry
-    URL watermarks (`[www.PT80.net]`), download-site tags, or SACD ripper
-    self-promotion strings."""
+    """Copy audio file to dest, writing only the metadata tags we control.
+
+    Uses `-map_metadata -1` to wipe ALL source metadata first, then adds back
+    only the curated fields. This is the only reliable way to:
+      1. Strip URL watermarks / SACD-ripper self-promotion / download-site tags
+         from comment/encoded_by/description fields
+      2. Replace case-mismatched source tags (e.g. FLAC vorbis 'GENRE=junk' is
+         case-equivalent to 'genre=Rock' but ffmpeg-without-map_metadata keeps
+         both, causing the original junk to win at read time)
+      3. Avoid leaking COPYRIGHT / ISRC / mood / tempo etc. from source unless
+         we explicitly want them (we don't — they're DAP noise)
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     meta_args = []
@@ -1885,19 +1900,20 @@ def copy_with_meta(src: Path, dest: Path, meta: dict):
             ffmpeg_key = 'album_artist' if k == 'album_artist' else k
             meta_args += ['-metadata', f'{ffmpeg_key}={v}']
 
-    # Always-clear junk-prone fields (these carry watermarks far more often
-    # than legitimate data; user-curated comments are vanishingly rare).
-    for junk_field in ('comment', 'encoded_by', 'description',
-                       'general_remark', 'originator_reference', 'TXXX'):
-        meta_args += ['-metadata', f'{junk_field}=']
+    # Belt-and-suspenders: even with -map_metadata -1, some container-specific
+    # fields (DFF creating_machine, BWF iXML chunks) can survive via container
+    # framing.  Clear them explicitly with `-metadata FIELD=`.
+    for f in ('comment', 'COMMENT', 'encoded_by', 'description',
+              'general_remark', 'originator_reference', 'creating_machine',
+              'lyricist', 'LYRICIST', 'composer', 'COMPOSER',
+              'publisher', 'TXXX', 'iTunNORM', 'iTunSMPB'):
+        meta_args += ['-metadata', f'{f}=']
 
-    if meta_args:
-        cmd = ['ffmpeg', '-y', '-i', str(src),
-               '-c', 'copy'] + meta_args + [str(dest)]
-        r = run(cmd)
-        if r.returncode != 0:
-            shutil.copy2(src, dest)
-    else:
+    cmd = ['ffmpeg', '-y', '-i', str(src),
+           '-map_metadata', '-1',     # discard all source metadata
+           '-c', 'copy'] + meta_args + [str(dest)]
+    r = run(cmd)
+    if r.returncode != 0:
         shutil.copy2(src, dest)
 
 
