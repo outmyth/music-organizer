@@ -56,3 +56,50 @@ originSessionId: 9208d9a1-fa25-4144-b86c-48882cbc051d
 4. 更新 memory
 
 不要等用户提醒。
+
+---
+
+## 原则 6：整理新音乐文件时的自动复盘流程（用户 2026-05-05 明确要求）
+
+每次整理新加入的音乐文件后，**主动**做以下复盘：
+
+### 触发条件
+新增 source 文件（in/ 下出现新的艺人/专辑/合辑），或运行脚本发现：
+- 某 album 的 metadata 不正确（artist/title/year/album）
+- 某 album 流派归类错误
+- 某 album 没有封面
+- 文件名约定/编码方式之前没见过
+- 流媒体平台/下载源使用了新的 marketing 名
+
+### 复盘动作（**自动执行，不要等提醒**）
+
+1. **诊断根因**：不要只修当前症状。问"这个错误模式以前见过吗？同类文件以后还会出现吗？"
+2. **修复代码**：把判断逻辑加进脚本（自动化），不要靠每次手动 patch 单个文件
+3. **写入 memory**：
+   - 如果是新 bug pattern → `feedback_<topic>_bugs.md`（或更新现有的）
+   - 如果是新文件名/tag 约定 → `feedback_filename_conventions.md`
+   - 如果是 embedded tag 反例 → `feedback_embedded_tag_skepticism.md`
+   - 如果是用户偏好（流派合并、专辑名清理等）→ `feedback_workflow_principles.md`
+4. **双写**：同时写到 `~/.claude/projects/<hash>/memory/` 和 `<repo>/.claude-memory/`
+5. **更新 MEMORY.md 索引**（如果是新文件）
+6. **`git add .claude-memory/ <相关代码文件> && git commit && git push`**
+7. 同步 SD 卡（如果 out/ 内容变了）
+
+### 反例：不要做的事
+
+- ❌ 只修代码不写 memory（下次 session 又会犯）
+- ❌ 只写 memory 不修代码（用户每次都要发现并提醒）
+- ❌ 写了 memory 但只放 `~/.claude/`（换机器丢失）
+- ❌ 等用户问"为什么之前没识别"才复盘（应主动复盘）
+
+### 模板：复盘文档至少包含
+
+```
+## 错误判断 vs 应有的警觉
+| 当时的逻辑 | 应识别的信号 |
+|----|----|
+## 根本原因
+（一句话说清，避免泛泛而谈）
+## 自动化规则（已加入代码 / TODO）
+## 教训
+```
