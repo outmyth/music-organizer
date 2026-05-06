@@ -1125,7 +1125,7 @@ ALBUM_META = {
     },
     '古典小提琴名盘': {
         'album': 'Songs My Mother Taught Me',
-        'album_artist': 'Various Classical',
+        'album_artist': 'Various',
         'genre': 'Classical',
         'year': '',
         'parse': 'violin_wav',
@@ -1799,9 +1799,37 @@ def split_cue_album(cue_path: Path, album_meta_override: dict,
     return results
 
 
+def _has_junk_source_field(fp: Path) -> bool:
+    """Detect junk/mojibake in source tags. Triggers writeback + dest re-copy.
+    Checks two failure modes:
+      1. Watermark/junk in comment/encoded_by/description/general_remark
+      2. Mojibake in title/artist/album/album_artist (GBK mis-decode etc.)"""
+    try:
+        r = run(['ffprobe', '-v', 'quiet', '-print_format', 'json',
+                 '-show_format', str(fp)])
+        tags = json.loads(r.stdout).get('format', {}).get('tags', {})
+    except Exception:
+        return False
+    for k, v in tags.items():
+        if not isinstance(v, str) or not v:
+            continue
+        kl = k.lower()
+        if kl in ('comment', 'encoded_by', 'description',
+                  'general_remark', 'originator_reference'):
+            if (_JUNK_TAG_RE.search(v) or 'SACD Ripper' in v
+                    or 'PT80' in v or 'hifi' in v.lower()
+                    or '[www.' in v.lower()):
+                return True
+        elif kl in ('title', 'artist', 'album', 'album_artist', 'genre'):
+            if _is_mojibake(v):
+                return True
+    return False
+
+
 def writeback_to_source(fp: Path, enriched: dict, original: dict) -> bool:
-    """Write enriched tags back to source file in-place, only for fields that were
-    originally empty/junk. Returns True if anything was written.
+    """Write enriched tags back to source file in-place. Two triggers:
+      1. Field was originally empty and enrichment filled it (artist/album/etc.)
+      2. Source has junk in comment/encoded_by/description (needs cleaning)
 
     Uses ffmpeg -c copy (no re-encode) via a temp file + atomic replace so the
     original is never left in a partial state.
@@ -1809,7 +1837,8 @@ def writeback_to_source(fp: Path, enriched: dict, original: dict) -> bool:
     fields = ('title', 'artist', 'album_artist', 'album', 'genre', 'date', 'track', 'disc')
     delta = {k: enriched[k] for k in fields
              if enriched.get(k) and not original.get(k)}
-    if not delta:
+    has_junk = _has_junk_source_field(fp)
+    if not delta and not has_junk:
         return False
 
     suffix = fp.suffix
@@ -1819,10 +1848,19 @@ def writeback_to_source(fp: Path, enriched: dict, original: dict) -> bool:
         for k, v in delta.items():
             ffmpeg_key = 'album_artist' if k == 'album_artist' else k
             meta_args += ['-metadata', f'{ffmpeg_key}={v}']
+        # Always clear junk-prone fields when rewriting source
+        for junk_field in ('comment', 'encoded_by', 'description',
+                           'general_remark', 'originator_reference'):
+            meta_args += ['-metadata', f'{junk_field}=']
         r = run(['ffmpeg', '-y', '-i', str(fp), '-c', 'copy'] + meta_args + [str(tmp_path)])
         if r.returncode == 0 and tmp_path.exists():
             tmp_path.replace(fp)
-            print(f"   🔖  source tag written back: {fp.name}  ({', '.join(delta)})")
+            reason = []
+            if delta:
+                reason.append(', '.join(delta))
+            if has_junk:
+                reason.append('junk-clean')
+            print(f"   🔖  source tag written back: {fp.name}  ({'; '.join(reason)})")
             return True
         else:
             tmp_path.unlink(missing_ok=True)
@@ -1833,10 +1871,13 @@ def writeback_to_source(fp: Path, enriched: dict, original: dict) -> bool:
 
 
 def copy_with_meta(src: Path, dest: Path, meta: dict):
-    """Copy audio file to dest, writing metadata tags via ffmpeg."""
+    """Copy audio file to dest, writing metadata tags via ffmpeg.
+    Also wipes junk-prone source-only fields (comment / encoded_by /
+    description / general_remark / originator_reference) which commonly carry
+    URL watermarks (`[www.PT80.net]`), download-site tags, or SACD ripper
+    self-promotion strings."""
     dest.parent.mkdir(parents=True, exist_ok=True)
 
-    # If tags are already good and file is same format, just copy
     meta_args = []
     for k in ('title','artist','album_artist','album','genre','date','track','disc'):
         v = meta.get(k, '')
@@ -1844,12 +1885,17 @@ def copy_with_meta(src: Path, dest: Path, meta: dict):
             ffmpeg_key = 'album_artist' if k == 'album_artist' else k
             meta_args += ['-metadata', f'{ffmpeg_key}={v}']
 
+    # Always-clear junk-prone fields (these carry watermarks far more often
+    # than legitimate data; user-curated comments are vanishingly rare).
+    for junk_field in ('comment', 'encoded_by', 'description',
+                       'general_remark', 'originator_reference', 'TXXX'):
+        meta_args += ['-metadata', f'{junk_field}=']
+
     if meta_args:
         cmd = ['ffmpeg', '-y', '-i', str(src),
                '-c', 'copy'] + meta_args + [str(dest)]
         r = run(cmd)
         if r.returncode != 0:
-            # Fallback: plain copy
             shutil.copy2(src, dest)
     else:
         shutil.copy2(src, dest)
@@ -2325,23 +2371,29 @@ def main(force: bool = False):
             'disc':         disc,
         }
 
+        # Force re-copy when source has junk in comment/encoded_by/etc.
+        # Otherwise existing dest from old runs keeps the watermark.
+        src_has_junk = _has_junk_source_field(fp)
+
         dest_dir.mkdir(parents=True, exist_ok=True)
-        if force or not dest_fp.exists() or dest_fp.stat().st_size != fp.stat().st_size:
-            if needs_tag_write:
+        if (force or not dest_fp.exists()
+                or dest_fp.stat().st_size != fp.stat().st_size
+                or src_has_junk):
+            if needs_tag_write or src_has_junk:
                 copy_with_meta(fp, dest_fp, meta_to_write)
             else:
                 shutil.copy2(fp, dest_fp)
-            status = "📝" if needs_tag_write else "✅"
+            status = "📝" if (needs_tag_write or src_has_junk) else "✅"
             prefix = f"Test/{cat}/" if cat else ""
             print(f"   {status}  {prefix}{genre}/{artist}/{alb_folder}/{dest_fn}")
         else:
             print(f"   ⏭  {dest_fn}")
 
-        # Write enriched tags back to source file (only fields that were originally
-        # empty/junk). This makes source files self-documenting: a fresh re-run
-        # reads embedded tags directly instead of re-querying external services.
-        if needs_tag_write:
-            writeback_to_source(fp, meta, original_meta)
+        # Write enriched tags back to source file. Triggered by either:
+        #   (a) needs_tag_write — enrichment changed metadata, or
+        #   (b) source has junk in comment/encoded_by/description fields
+        # Both cases handled inside writeback_to_source; calling unconditionally.
+        writeback_to_source(fp, meta, original_meta)
 
         # Flag missing tags
         missing = [f for f in ('title','artist','album') if not meta.get(f)]

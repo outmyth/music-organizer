@@ -9,3 +9,4 @@
 - [文件名约定](feedback_filename_conventions.md) — Qobuz `[Album]`+`「Artist」`、SACD COLLECTION、实体CD版/盒装版后缀的解析规则
 - [WAV tag 解码完整审计](feedback_wav_decoding_full_audit.md) — 元教训：修同类 bug 必须做全维度审计，不只修 symptom（WAV 多种 tag 存储 × 多种编码，INFO chunk + GBK 是国内 rip 主路径）
 - [全部历史问题完整复盘](retrospective_full_timeline.md) — 61 commit 按 12 主题分类，5 个反复犯错的元 pattern，自我审视清单（每次 fix 前必过）
+- [dest junk 传播链 + ALBUM_META 软硬字段](feedback_dest_junk_propagation.md) — source 修了 dest 没修的根因；ffmpeg `-c copy` 默认保留所有 metadata；ALBUM_META 应支持软字段允许外部服务覆盖（架构 TODO）
