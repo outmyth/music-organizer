@@ -145,7 +145,7 @@ ARTIST_GENRE = {
     'mari nakamoto': 'Jazz',
 
     'junkie xl':     'Soundtrack',
-    '群星':           'Choral',
+    '群星':           'Classical',
     # MusicBrainz returns 'Folk' for these — local Jazz override is intentional
     'alison krauss': 'Jazz',
     'eva cassidy':   'Jazz',
@@ -180,7 +180,7 @@ GENRE_MAP = {
     'jazz':'Jazz','jazz vocal':'Jazz','vocal jazz':'Jazz','bossa nova':'Jazz',
     'swing':'Jazz','blues':'Jazz',
     'classical':'Classical','classic':'Classical','chamber':'Classical',
-    'choral':'Choral','choir':'Choral','sacred':'Choral',
+    'choral':'Classical','choir':'Classical','sacred':'Classical',
     'pop':'Pop','adult contemporary':'Pop',
     '流行':'Pop','流行歌曲':'Pop','流行音乐':'Pop',         # zh: pop
     'soul':'Pop','r&b':'R&B','funk':'R&B',
@@ -237,7 +237,7 @@ _MB_TAG_MAP = {
     'classical':     'Classical',
     'orchestra':     'Classical',
     'chamber music': 'Classical',
-    'choral':        'Choral',
+    'choral':        'Classical',
     'rock':          'Rock',
     'hard rock':     'Rock',
     'metal':         'Metal',
@@ -636,15 +636,20 @@ def itunes_lookup(artist: str, title: str) -> dict:
     # Extract year from releaseDate ('YYYY-MM-DD' or 'YYYY-MM-DDT…')
     release = match.get('releaseDate', '')
     yr_m = re.match(r'(\d{4})', release)
+    # Artwork: iTunes returns 100x100; replace for 600x600 quality
+    artwork_url = match.get('artworkUrl100', '')
+    if artwork_url:
+        artwork_url = re.sub(r'100x100\w*', '600x600bb', artwork_url)
     result = {
-        'album': match.get('collectionName', ''),
-        'date':  yr_m.group(1) if yr_m else '',
-        'genre': match.get('primaryGenreName', ''),
+        'album':   match.get('collectionName', ''),
+        'date':    yr_m.group(1) if yr_m else '',
+        'genre':   match.get('primaryGenreName', ''),
+        'artwork': artwork_url,
     }
     # Don't keep empty dicts — store None-equivalent so we don't re-query
     _ITUNES_CACHE[cache_key] = result
     _itunes_save_cache()
-    if any(result.values()):
+    if any(v for k, v in result.items() if k != 'artwork'):
         print(f"   🍎  iTunes: {artist!r} / {title!r} → album={result['album']!r} date={result['date']!r}")
     return result
 
@@ -1006,6 +1011,65 @@ def fetch_cover_art(artist: str, album: str, year: str, dest_path: Path) -> bool
                     return True
         except Exception:
             continue
+    return False
+
+
+def fetch_cover_itunes_album(artist: str, album: str, dest_path: Path) -> bool:
+    """Download album artwork from iTunes Store by artist+album search.
+    Cached under key 'albumart::{artist}::{album}' to avoid re-querying.
+    Works for Chinese/Japanese/Korean artists that CAA may not have."""
+    if not (artist and album):
+        return False
+    cache_key = f"albumart::{artist.lower()}::{album.lower()}"
+    cached = _ITUNES_CACHE.get(cache_key)
+    if cached == 'not_found':
+        return False
+
+    if isinstance(cached, dict) and cached.get('artwork'):
+        artwork_url = cached['artwork']
+    else:
+        term = urllib.parse.quote(f"{artist} {album}")
+        url  = (f'https://itunes.apple.com/search?term={term}'
+                f'&entity=album&limit=5&media=music')
+        req  = urllib.request.Request(url, headers={
+            'User-Agent': 'MusicOrganizer/2.0 (outmyth@gmail.com)',
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+        except Exception:
+            return False
+        results = data.get('results', [])
+        a_lower = artist.lower()
+        match = next(
+            (r for r in results
+             if a_lower in r.get('artistName', '').lower()
+             or r.get('artistName', '').lower() in a_lower),
+            results[0] if results else None,
+        )
+        if not match:
+            _ITUNES_CACHE[cache_key] = 'not_found'
+            _itunes_save_cache()
+            return False
+        artwork_url = match.get('artworkUrl100', '')
+        if artwork_url:
+            artwork_url = re.sub(r'100x100\w*', '600x600bb', artwork_url)
+        _ITUNES_CACHE[cache_key] = {'artwork': artwork_url}
+        _itunes_save_cache()
+
+    if not artwork_url:
+        return False
+    try:
+        req = urllib.request.Request(artwork_url, headers={
+            'User-Agent': 'MusicOrganizer/2.0 (outmyth@gmail.com)',
+        })
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            img_data = resp.read()
+            if len(img_data) > 1000:
+                dest_path.write_bytes(img_data)
+                return True
+    except Exception:
+        return False
     return False
 
 
@@ -1575,6 +1639,39 @@ def split_cue_album(cue_path: Path, album_meta_override: dict,
     return results
 
 
+def writeback_to_source(fp: Path, enriched: dict, original: dict) -> bool:
+    """Write enriched tags back to source file in-place, only for fields that were
+    originally empty/junk. Returns True if anything was written.
+
+    Uses ffmpeg -c copy (no re-encode) via a temp file + atomic replace so the
+    original is never left in a partial state.
+    """
+    fields = ('title', 'artist', 'album_artist', 'album', 'genre', 'date', 'track', 'disc')
+    delta = {k: enriched[k] for k in fields
+             if enriched.get(k) and not original.get(k)}
+    if not delta:
+        return False
+
+    suffix = fp.suffix
+    tmp_path = fp.parent / (fp.stem + '.__tmp__' + suffix)  # keep real ext so ffmpeg knows format
+    try:
+        meta_args = []
+        for k, v in delta.items():
+            ffmpeg_key = 'album_artist' if k == 'album_artist' else k
+            meta_args += ['-metadata', f'{ffmpeg_key}={v}']
+        r = run(['ffmpeg', '-y', '-i', str(fp), '-c', 'copy'] + meta_args + [str(tmp_path)])
+        if r.returncode == 0 and tmp_path.exists():
+            tmp_path.replace(fp)
+            print(f"   🔖  source tag written back: {fp.name}  ({', '.join(delta)})")
+            return True
+        else:
+            tmp_path.unlink(missing_ok=True)
+            return False
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        return False
+
+
 def copy_with_meta(src: Path, dest: Path, meta: dict):
     """Copy audio file to dest, writing metadata tags via ffmpeg."""
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1726,7 +1823,7 @@ def main(force: bool = False):
             override.setdefault('album',        'Now the Green Blade Riseth')
             override.setdefault('album_artist', '群星')
             override.setdefault('artist',       '群星')
-            override.setdefault('genre',        'Choral')
+            override.setdefault('genre',        'Classical')
             override.setdefault('year',         '2008')
 
         stage_sub = STAGING / sanitize(folder_name, 60) / (f"CD{disc_n}" if disc_n else "CD")
@@ -1821,6 +1918,7 @@ def main(force: bool = False):
 
     for fp in audio_files:
         meta = probe(fp)
+        original_meta = dict(meta)   # snapshot before any enrichment, for writeback comparison
         folder_name = fp.parent.name
 
         # Check for album-level override
@@ -2059,6 +2157,12 @@ def main(force: bool = False):
         else:
             print(f"   ⏭  {dest_fn}")
 
+        # Write enriched tags back to source file (only fields that were originally
+        # empty/junk). This makes source files self-documenting: a fresh re-run
+        # reads embedded tags directly instead of re-querying external services.
+        if needs_tag_write:
+            writeback_to_source(fp, meta, original_meta)
+
         # Flag missing tags
         missing = [f for f in ('title','artist','album') if not meta.get(f)]
         if missing:
@@ -2156,21 +2260,31 @@ def main(force: bool = False):
 
         # Find cover from source
         src = t['src']
-        # Look in original source folder (for staged CUE splits, go up to source album)
-        search_dirs = [src.parent]
-        # For staged files, also check the original CUE folder
+        # Build search_dirs: start at src.parent, walk UP to SOURCE root.
+        # This handles multi-disc albums where cover.jpg lives in the parent
+        # album folder (e.g. in/Artist/ has the art, files are in in/Artist/DISC 4/).
         if str(STAGING) in str(src):
-            # Try to find the original folder in SOURCE
+            # Staged CUE split: search by original source folder key
+            search_dirs = []
             folder_key = src.parent.parent.name  # e.g. "Carlo Maria Giulini..."
             for root, dirs, _ in os.walk(SOURCE):
                 if folder_key in root:
                     search_dirs.append(Path(root))
                     break
-            # Also search for album title substring
-            for root, dirs, _ in os.walk(SOURCE):
-                alb_part = t.get('album', '')[:15].lower()
-                if alb_part and alb_part in root.lower():
-                    search_dirs.append(Path(root))
+            alb_part = t.get('album', '')[:15].lower()
+            if alb_part:
+                for root, dirs, _ in os.walk(SOURCE):
+                    if alb_part in root.lower():
+                        search_dirs.append(Path(root))
+        else:
+            # Individual file: walk up from src.parent toward SOURCE
+            search_dirs = []
+            d = src.parent
+            while True:
+                search_dirs.append(d)
+                if d == SOURCE or d.parent == SOURCE.parent:
+                    break
+                d = d.parent
 
         cover_src = None
         for d in search_dirs:
@@ -2184,7 +2298,17 @@ def main(force: bool = False):
             art_copied += 1
     print(f"   ✅  {art_copied} cover art file(s) copied.")
 
-    # ── Step 5b: Download missing covers from Cover Art Archive ───────────────
+    # ── Step 5b: Download missing covers — CAA then iTunes fallback ──────────
+    # Build a map: dest_dir → list of tracks (for iTunes artwork lookup)
+    _dir_tracks: dict[Path, list] = {}
+    for t in all_tracks:
+        dd = t.get('dest_dir')
+        if not dd:
+            continue
+        if _DISC_DIR_RE.match(dd.name):
+            dd = dd.parent
+        _dir_tracks.setdefault(dd, []).append(t)
+
     art_downloaded = 0
     art_attempted  = 0
     seen           = set()
@@ -2192,7 +2316,6 @@ def main(force: bool = False):
         dest_dir = t.get('dest_dir')
         if not dest_dir:
             continue
-        # Multi-disc: download to album level, not per-disc
         if _DISC_DIR_RE.match(dest_dir.name):
             dest_dir = dest_dir.parent
         if dest_dir in seen:
@@ -2204,15 +2327,24 @@ def main(force: bool = False):
         artist = t.get('album_artist') or t.get('artist') or ''
         album  = t.get('album', '')
         yr     = t.get('year', '')
-        # Skip "Various"-marker artists — release search needs a real performer
+
         if _is_various_marker(artist) or not artist or not album:
             continue
         art_attempted += 1
+
+        # Source 1: Cover Art Archive (MusicBrainz) — best for Western artists
         if fetch_cover_art(artist, album, yr, dst_art):
             art_downloaded += 1
             print(f"   🌐  CAA: {dest_dir.relative_to(DEST)}/folder.jpg")
+            continue
+
+        # Source 2: iTunes Store album search — good coverage for Asian pop
+        if fetch_cover_itunes_album(artist, album, dst_art):
+            art_downloaded += 1
+            print(f"   🍎  iTunes: {dest_dir.relative_to(DEST)}/folder.jpg")
+
     if art_attempted:
-        print(f"   ✅  Downloaded {art_downloaded}/{art_attempted} from Cover Art Archive.")
+        print(f"   ✅  Downloaded {art_downloaded}/{art_attempted} from online sources.")
 
     # ── Step 6: Generate playlists ────────────────────────────────────────────
     # Single output location: SD card root (= DEST). Paths inside use the
