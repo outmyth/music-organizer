@@ -1,3 +1,14 @@
+## 📚 项目记忆 / Lessons learned (必读)
+
+新 session 启动时，请读 `.claude-memory/MEMORY.md` 作为索引，并按需读取里面引用的具体规则文件。这些是历次 session 总结的反例、bug 模式、工作流原则，避免重复犯同样错误：
+
+- **`.claude-memory/MEMORY.md`** — 索引
+- 关键规则：embedded tag 不可无条件信任（流媒体平台把营销名写进 album）、文件名 `[Album]` `「Artist」` 是真值、ALBUM_META 新增条目必须有 year、Choral 已并入 Classical、Cantopop/Mandopop/J-Pop/K-Pop 全归 Pop
+
+session 中发现新的 bug 模式或用户偏好时，**直接写入 `.claude-memory/`**（不要等用户提醒）并提交，下次 session 就能自动加载。
+
+---
+
 扫描本地音乐文件夹 （～/data/Music/Source/）的音乐文件，读取 具体文件的metadata，自动整理这些文件和生成 M3U 播放列表用于以下音乐播放器，并且存储到目标目录（～/data/Music/Organized/）。
 
 **兼容设备：**
