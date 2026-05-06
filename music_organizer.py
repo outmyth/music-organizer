@@ -1014,9 +1014,61 @@ def fetch_cover_art(artist: str, album: str, year: str, dest_path: Path) -> bool
     return False
 
 
+_ALBUM_NORMALIZE_RE = re.compile(
+    r'(\s*\[[^\]]*\]\s*'                                      # [FLAC], [16B-44.1kHz], [WAV+CUE]
+    r'|\s*\([^\)]*(SACD|DSD|FLAC|Remaster|Hi-Res)[^\)]*\)\s*' # parenthetical format tags
+    r'|\s*-\s*SACD\s*COLLECTION\s*$'                          # "- SACD COLLECTION"
+    r'|实体CD版\s*$|SACD版\s*$|CD版\s*$|盘$'                   # zh: physical CD / SACD edition
+    r'|^Qobuz\s*Hi-?Res\s*Masters?\s*(of|for)?\s*'            # "Qobuz Hi-Res Masters of …"
+    r'|\s*Hi-?Res\s*Masters?\s*[A-Za-z]*\s*Essentials?\s*$'   # "… Hi-Res Masters Metal Essentials"
+    r')',
+    re.IGNORECASE,
+)
+
+
+def _normalize_album_for_search(album: str) -> str:
+    """Strip platform / format / edition suffixes that block iTunes/CAA matches."""
+    s = _ALBUM_NORMALIZE_RE.sub(' ', album)
+    s = re.sub(r'\s+', ' ', s)
+    # Normalize fullwidth punctuation to halfwidth equivalents (iTunes uses half)
+    s = s.replace('：', ':').replace('，', ',').replace('（', '(').replace('）', ')')
+    return s.strip(' -–:')
+
+
+def _itunes_search_album(artist: str, album: str) -> str:
+    """Run one iTunes Store album search; return artwork URL or ''."""
+    term = urllib.parse.quote(f"{artist} {album}".strip())
+    url  = (f'https://itunes.apple.com/search?term={term}'
+            f'&entity=album&limit=5&media=music')
+    req  = urllib.request.Request(url, headers={
+        'User-Agent': 'MusicOrganizer/2.0 (outmyth@gmail.com)',
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+    except Exception:
+        return ''
+    results = data.get('results', [])
+    a_lower = (artist or '').lower()
+    match = next(
+        (r for r in results
+         if a_lower and (a_lower in r.get('artistName', '').lower()
+                         or r.get('artistName', '').lower() in a_lower)),
+        results[0] if results else None,
+    )
+    if not match:
+        return ''
+    art = match.get('artworkUrl100', '')
+    if art:
+        art = re.sub(r'100x100\w*', '600x600bb', art)
+    return art
+
+
 def fetch_cover_itunes_album(artist: str, album: str, dest_path: Path) -> bool:
     """Download album artwork from iTunes Store by artist+album search.
-    Cached under key 'albumart::{artist}::{album}' to avoid re-querying.
+
+    Tries three queries: strict, normalized (strip platform suffixes),
+    artist+title-only (last 4 words). Cached under albumart::artist::album.
     Works for Chinese/Japanese/Korean artists that CAA may not have."""
     if not (artist and album):
         return False
@@ -1028,32 +1080,17 @@ def fetch_cover_itunes_album(artist: str, album: str, dest_path: Path) -> bool:
     if isinstance(cached, dict) and cached.get('artwork'):
         artwork_url = cached['artwork']
     else:
-        term = urllib.parse.quote(f"{artist} {album}")
-        url  = (f'https://itunes.apple.com/search?term={term}'
-                f'&entity=album&limit=5&media=music')
-        req  = urllib.request.Request(url, headers={
-            'User-Agent': 'MusicOrganizer/2.0 (outmyth@gmail.com)',
-        })
-        try:
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-        except Exception:
-            return False
-        results = data.get('results', [])
-        a_lower = artist.lower()
-        match = next(
-            (r for r in results
-             if a_lower in r.get('artistName', '').lower()
-             or r.get('artistName', '').lower() in a_lower),
-            results[0] if results else None,
-        )
-        if not match:
+        artwork_url = _itunes_search_album(artist, album)
+        if not artwork_url:
+            normalized = _normalize_album_for_search(album)
+            if normalized and normalized.lower() != album.lower():
+                artwork_url = _itunes_search_album(artist, normalized)
+                if artwork_url:
+                    print(f"   🔁  iTunes retry (normalized): {artist!r} / {normalized!r}")
+        if not artwork_url:
             _ITUNES_CACHE[cache_key] = 'not_found'
             _itunes_save_cache()
             return False
-        artwork_url = match.get('artworkUrl100', '')
-        if artwork_url:
-            artwork_url = re.sub(r'100x100\w*', '600x600bb', artwork_url)
         _ITUNES_CACHE[cache_key] = {'artwork': artwork_url}
         _itunes_save_cache()
 
@@ -1370,6 +1407,22 @@ def infer_from_path(fp: Path) -> dict:
     stem         = fp.stem
     inferred_disc = ''
 
+    # Qobuz-style filenames embed the real album in trailing brackets:
+    #   "02 - Comfortably Numb [The Wall].flac"
+    #   "10 - Peace Sells「Megadeth」[Peace Sells... But Who's Buying？].flac"
+    # Extract the bracketed album so individual songs from compilation samplers
+    # land under their actual source albums instead of the sampler folder.
+    bracket_album = ''
+    bracket_artist = ''
+    bm = re.search(r'\[([^\[\]]{2,80})\]\s*$', stem)
+    if bm:
+        bracket_album = bm.group(1).strip().strip('. ')
+        stem = stem[:bm.start()].rstrip(' -–')
+    am = re.search(r'「([^「」]{1,60})」', stem)
+    if am:
+        bracket_artist = am.group(1).strip()
+        stem = (stem[:am.start()] + stem[am.end():]).strip(' -–')
+
     # If immediate parent is a generic disc/cd folder, step up to grandparent.
     gm = _GENERIC_FOLDER_RE.match(folder)
     if gm and fp.parent.parent.name:
@@ -1405,6 +1458,12 @@ def infer_from_path(fp: Path) -> dict:
             m3 = re.match(r'^(\d+)\s+(.+)$', stem)
             if m3:
                 track_n, title = m3.group(1), m3.group(2).strip()
+    # Bracketed album/artist (Qobuz convention) takes precedence over folder-based.
+    if bracket_album:
+        falb = bracket_album
+    if bracket_artist:
+        artist = bracket_artist
+        fa     = bracket_artist
     return {'title': title, 'artist': artist, 'album_artist': fa,
             'album': falb, 'date': fy, 'track': track_n, 'genre': '', 'disc': inferred_disc}
 
@@ -1916,8 +1975,25 @@ def main(force: bool = False):
     print(f"\n📁  Processing {len(audio_files)} individual files …")
     missing_tags = []
 
+    # Sampler/compilation album-tag patterns that should be replaced with the
+    # real album encoded in the filename brackets (Qobuz convention).
+    _SAMPLER_ALBUM_RE = re.compile(
+        r'(Qobuz\s*Hi-?Res\s*Masters?'
+        r'|Hi-?Res\s*Masters?\s*[A-Za-z]*\s*Essentials?'
+        r'|SACD\s*COLLECTION)',
+        re.IGNORECASE,
+    )
+
     for fp in audio_files:
         meta = probe(fp)
+        # If the embedded album is a known sampler title (Qobuz/Hi-Res/SACD
+        # COLLECTION), prefer the real album from the filename's [brackets].
+        if meta.get('album') and _SAMPLER_ALBUM_RE.search(meta['album']):
+            bm = re.search(r'\[([^\[\]]{2,80})\]\s*$', fp.stem)
+            if bm:
+                real_album = bm.group(1).strip().strip('. ')
+                if real_album:
+                    meta['album'] = real_album
         original_meta = dict(meta)   # snapshot before any enrichment, for writeback comparison
         folder_name = fp.parent.name
 
@@ -2089,7 +2165,10 @@ def main(force: bool = False):
                 and meta.get('artist')):
             meta['album_artist'] = meta['artist']
 
-        genre  = classify_genre(meta)
+        # ALBUM_META override genre takes precedence over per-track classification.
+        # Without this, compilation albums (BAV) get split across 3 genre folders
+        # because each track's artist hits a different ARTIST_GENRE entry.
+        genre  = override['genre'] if override.get('genre') else classify_genre(meta)
         yr     = year(meta.get('date',''))
         tn     = track_num(meta.get('track',''))
         disc   = track_num(meta.get('disc',''))
