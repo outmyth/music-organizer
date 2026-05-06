@@ -1045,6 +1045,7 @@ ALBUM_META = {
         'album_artist': '唐朝',
         'artist':       '唐朝',
         'genre':        'Metal',
+        'year':         '1992',
     },
     '詹姆斯.莱文': {
         'album': 'Schubert: Trout Quintet & Arpeggione Sonata',
